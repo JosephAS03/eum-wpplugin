@@ -375,7 +375,7 @@ class EUM_Term_Manager {
   private function render_bulk_create_panel(): void {
     echo '<div class="eum-term-bulk-panel" style="margin-top:18px;">';
     echo '<h3 style="margin:0 0 8px 0;">Bulk Create Job Paths</h3>';
-    echo '<p class="description" style="margin-top:0;">Use this to create one or many Job Paths at once. Selected parent paths act as prefixes, so you can add the same child to many parents, create full child chains downward, or do both together.</p>';
+    echo '<p class="description" style="margin-top:0;">Use this to create one or many Job Paths at once. Selected parent paths act as prefixes, so you can add the same child to many parents, create full child chains downward, or do both together. Every requested item creates a new record with its own ID, even when its name matches an existing path or another input line.</p>';
     echo '<form method="post">';
     wp_nonce_field('eum_terms_action', 'eum_terms_nonce');
     echo '<input type="hidden" name="eum_tax" value="eum_job_path">';
@@ -384,7 +384,6 @@ class EUM_Term_Manager {
     echo '<p><label><strong>Parent Job Paths</strong></label><br>' . $this->job_path_multi_select('eum_bulk_create_parent_ids[]', []) . '<br><span class="description">Leave blank to create from the root. Selecting multiple parents will create under each of them.</span></p>';
     echo '<p><label><strong>Simple Child Job Paths</strong></label><br><textarea name="eum_bulk_create_child_names" rows="8" class="large-text" placeholder="Assistant Manager&#10;Supervisor&#10;Coordinator"></textarea><br><span class="description">One child per line. Each line is created directly beneath every selected parent.</span></p>';
     echo '<p><label><strong>Create Multiple Path Items Down</strong></label><br><textarea name="eum_bulk_create_down_paths" rows="8" class="large-text" placeholder="Director > Manager > Lead&#10;Operations > Fulfillment > Picker"></textarea><br><span class="description">One chain per line. Use <code>&gt;</code> or <code>/</code> between levels. If parent paths are selected, each chain is created beneath every selected parent.</span></p>';
-    echo '<p><label><strong>Existing Path Handling</strong></label><br><select name="eum_bulk_create_existing_mode"><option value="reuse">Reuse existing matching path items</option><option value="error">Stop if an exact path item already exists under the same parent</option></select><br><span class="description">Reuse is safest for repeat runs.</span></p>';
     echo '</div>';
     echo '<p><button type="submit" class="button button-primary">Create Job Paths in Bulk</button></p>';
     echo '</form>';
@@ -527,21 +526,18 @@ class EUM_Term_Manager {
       $parent_ids = isset($_POST['eum_bulk_create_parent_ids']) ? array_values(array_unique(array_filter(array_map('intval', (array)$_POST['eum_bulk_create_parent_ids']), fn($id) => $id > 0 && term_exists($id, 'eum_job_path')))) : [];
       $child_names = $this->bulk_lines((string)($_POST['eum_bulk_create_child_names'] ?? ''));
       $chain_lines = $this->bulk_lines((string)($_POST['eum_bulk_create_down_paths'] ?? ''));
-      $existing_mode = sanitize_key((string)($_POST['eum_bulk_create_existing_mode'] ?? 'reuse'));
       if (empty($child_names) && empty($chain_lines)) $this->redirect_with_msg($tax, 'Enter at least one simple child path or one downward path chain.', 'error');
 
       $base_parent_ids = empty($parent_ids) ? [0] : $parent_ids;
       $created = 0;
-      $reused = 0;
       $processed_paths = 0;
 
       foreach ($base_parent_ids as $base_parent_id) {
         foreach ($child_names as $child_name) {
-          $result = $this->get_or_create_job_path_term($child_name, (int)$base_parent_id, $existing_mode === 'reuse');
+          $result = $this->create_job_path_term($child_name, (int)$base_parent_id);
           if (is_wp_error($result)) $this->redirect_with_msg($tax, $result->get_error_message(), 'error');
           $processed_paths++;
-          if (!empty($result['created'])) $created++;
-          else $reused++;
+          $created++;
         }
 
         foreach ($chain_lines as $chain_line) {
@@ -549,18 +545,17 @@ class EUM_Term_Manager {
           if (empty($segments)) continue;
           $current_parent_id = (int)$base_parent_id;
           foreach ($segments as $segment) {
-            $result = $this->get_or_create_job_path_term($segment, $current_parent_id, $existing_mode === 'reuse');
+            $result = $this->create_job_path_term($segment, $current_parent_id);
             if (is_wp_error($result)) $this->redirect_with_msg($tax, $result->get_error_message(), 'error');
             $processed_paths++;
-            if (!empty($result['created'])) $created++;
-            else $reused++;
+            $created++;
             $current_parent_id = (int)($result['term_id'] ?? 0);
             if ($current_parent_id <= 0) $this->redirect_with_msg($tax, 'A Job Path could not be created.', 'error');
           }
         }
       }
 
-      $message = 'Processed ' . $processed_paths . ' Job Path item(s): created ' . $created . ', reused ' . $reused . '.';
+      $message = 'Created ' . $created . ' distinct Job Path record(s) from ' . $processed_paths . ' requested item(s).';
       $this->redirect_with_msg($tax, $message);
     }
 
@@ -633,7 +628,7 @@ class EUM_Term_Manager {
       if ($line === '') continue;
       $out[] = $line;
     }
-    return array_values(array_unique($out));
+    return array_values($out);
   }
 
   private function bulk_chain_segments(string $line): array {
@@ -648,37 +643,22 @@ class EUM_Term_Manager {
     return $out;
   }
 
-  private function get_or_create_job_path_term(string $name, int $parent_id, bool $allow_reuse = true) {
+  private function create_job_path_term(string $name, int $parent_id) {
     $name = sanitize_text_field($name);
     if ($name === '') return new WP_Error('empty_name', 'A Job Path name was empty.');
 
-    $existing_id = $this->find_job_path_term_by_name_and_parent($name, $parent_id);
-    if ($existing_id > 0) {
-      if ($allow_reuse) return ['term_id' => $existing_id, 'created' => false];
-      $full = $this->term_full_path('eum_job_path', $existing_id, ' / ');
-      return new WP_Error('term_exists', 'Job Path already exists: ' . ($full !== '' ? $full : $name));
-    }
-
-    $inserted = wp_insert_term($name, 'eum_job_path', ['parent' => max(0, $parent_id)]);
+    // WordPress rejects same-name siblings unless a unique slug is explicitly
+    // provided. The unique slug preserves the display name while ensuring each
+    // bulk-created path receives a separate term ID.
+    $slug_prefix = substr(sanitize_title($name), 0, 150);
+    if ($slug_prefix === '') $slug_prefix = 'job-path';
+    $slug = $slug_prefix . '-eum-' . str_replace('-', '', wp_generate_uuid4());
+    $inserted = wp_insert_term($name, 'eum_job_path', [
+      'parent' => max(0, $parent_id),
+      'slug' => $slug,
+    ]);
     if (is_wp_error($inserted)) return $inserted;
     return ['term_id' => (int)($inserted['term_id'] ?? 0), 'created' => true];
-  }
-
-  private function find_job_path_term_by_name_and_parent(string $name, int $parent_id): int {
-    $terms = get_terms([
-      'taxonomy' => 'eum_job_path',
-      'hide_empty' => false,
-      'name' => $name,
-      'parent' => max(0, $parent_id),
-      'number' => 50,
-    ]);
-    if (is_wp_error($terms) || empty($terms)) return 0;
-    foreach ($terms as $term) {
-      if ((int)$term->parent === max(0, $parent_id) && sanitize_text_field((string)$term->name) === $name) {
-        return (int)$term->term_id;
-      }
-    }
-    return 0;
   }
 
   private function redirect_with_msg(string $tax, string $msg, string $type = 'success'): void {

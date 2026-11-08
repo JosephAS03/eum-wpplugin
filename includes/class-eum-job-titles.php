@@ -6,15 +6,70 @@ class EUM_Job_Titles {
   const META_ALLOWED_JOB_PATHS = 'eum_allowed_job_paths';
   const META_DEFAULT_GROUPS = 'eum_default_user_groups';
   const META_DEFAULT_PROJECTS = 'eum_default_projects';
+  const USER_SYNC_HOOK = 'eum_job_title_user_sync_batch';
+  const USER_SYNC_BATCH_SIZE = 50;
 
   private static $title_cache = null;
   private static $labels_cache = [];
 
   public function init(): void {
     add_action('init', [$this, 'register_cpt']);
+    add_action(self::USER_SYNC_HOOK, [$this, 'process_user_sync_batch'], 10, 3);
     if (is_admin()) {
       add_action('admin_menu', [$this, 'menu'], 30);
     }
+  }
+
+  public function process_user_sync_batch($user_ids, $actor_user_id = 0, $reason = 'Job Title Update'): void {
+    if (!class_exists('EUM_Taxonomies')) return;
+    $user_ids = array_values(array_unique(array_filter(array_map('intval', (array)$user_ids), static function($user_id) {
+      return $user_id > 0 && get_user_by('id', $user_id);
+    })));
+    $actor_user_id = max(0, (int)$actor_user_id);
+    $reason = sanitize_text_field((string)$reason) ?: 'Job Title Update';
+    foreach ($user_ids as $user_id) {
+      EUM_Taxonomies::sync_user_classification_effects($user_id, $actor_user_id, $reason);
+    }
+  }
+
+  private function schedule_path_user_sync(array $path_ids, int $actor_user_id, string $reason): int {
+    if (!taxonomy_exists('eum_job_path')) return 0;
+    $term_ids = [];
+    foreach (array_values(array_unique(array_filter(array_map('intval', $path_ids)))) as $path_id) {
+      if ($path_id <= 0 || !term_exists($path_id, 'eum_job_path')) continue;
+      $term_ids[] = $path_id;
+      $descendants = get_term_children($path_id, 'eum_job_path');
+      if (!is_wp_error($descendants) && is_array($descendants)) {
+        $term_ids = array_merge($term_ids, array_map('intval', $descendants));
+      }
+    }
+    $term_ids = array_values(array_unique(array_filter($term_ids)));
+    if (empty($term_ids)) return 0;
+
+    $user_ids = get_objects_in_term($term_ids, 'eum_job_path');
+    if (is_wp_error($user_ids)) {
+      if (function_exists('eum_log_message')) eum_log_message('[EUM Job Titles] Could not collect users for background sync: ' . $user_ids->get_error_message());
+      return 0;
+    }
+    $user_ids = array_values(array_unique(array_filter(array_map('intval', (array)$user_ids))));
+    if (empty($user_ids)) return 0;
+
+    $batches = array_chunk($user_ids, self::USER_SYNC_BATCH_SIZE);
+    $start_at = time() + 10;
+    foreach ($batches as $index => $batch) {
+      $args = [$batch, max(0, $actor_user_id), $reason];
+      if (!wp_next_scheduled(self::USER_SYNC_HOOK, $args)) {
+        wp_schedule_single_event($start_at + ($index * 5), self::USER_SYNC_HOOK, $args);
+      }
+    }
+    return count($user_ids);
+  }
+
+  private function redirect_with_save_error(string $details): void {
+    $transient_key = 'eum_job_title_save_error_' . (int)get_current_user_id();
+    set_transient($transient_key, sanitize_text_field($details), 60);
+    wp_safe_redirect(add_query_arg(['page' => 'eum-job-titles', 'updated' => 'error'], admin_url('admin.php')));
+    exit;
   }
 
   public function register_cpt(): void {
@@ -211,10 +266,8 @@ class EUM_Job_Titles {
       $affected_paths = self::allowed_job_paths($post_id);
       wp_delete_post($post_id, true);
       self::invalidate_cache();
-      if (class_exists('EUM_Public_Meta')) {
-        foreach ($affected_paths as $term_id) EUM_Public_Meta::sync_users_for_job_path((int)$term_id);
-      }
-      wp_safe_redirect(add_query_arg(array_merge($redirect_args, ['updated' => 'deleted']), admin_url('admin.php')));
+      $sync_count = $this->schedule_path_user_sync($affected_paths, get_current_user_id(), 'Job Title Deleted');
+      wp_safe_redirect(add_query_arg(array_merge($redirect_args, ['updated' => 'deleted', 'sync_queued' => $sync_count]), admin_url('admin.php')));
       exit;
     }
 
@@ -227,6 +280,7 @@ class EUM_Job_Titles {
       exit;
     }
 
+    $affected_paths = $action === 'update' && $post_id > 0 ? self::allowed_job_paths($post_id) : [];
     $postarr = [
       'post_type' => self::CPT,
       'post_status' => 'publish',
@@ -234,27 +288,40 @@ class EUM_Job_Titles {
     ];
     if ($action === 'update' && $post_id > 0) {
       $postarr['ID'] = $post_id;
-      $post_id = (int)wp_update_post($postarr, true);
+      $post_result = wp_update_post($postarr, true);
     } else {
-      $post_id = (int)wp_insert_post($postarr, true);
+      $post_result = wp_insert_post($postarr, true);
     }
 
-    if ($post_id > 0 && !is_wp_error($post_id)) {
+    if (is_wp_error($post_result) || (int)$post_result <= 0) {
+      $detail = is_wp_error($post_result) ? $post_result->get_error_message() : 'WordPress returned an invalid Job Title ID.';
+      if (function_exists('eum_log_message')) eum_log_message('[EUM Job Titles] Could not save title: ' . sanitize_text_field($detail));
+      $this->redirect_with_save_error($detail);
+    }
+
+    $post_id = (int)$post_result;
+    $affected_paths = array_values(array_unique(array_merge($affected_paths, $allowed_paths)));
+    try {
       update_post_meta($post_id, self::META_ALLOWED_JOB_PATHS, $allowed_paths);
       update_post_meta($post_id, self::META_DEFAULT_GROUPS, $groups);
       update_post_meta($post_id, self::META_DEFAULT_PROJECTS, $projects);
       if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::save_job_title_fields($post_id, $_POST);
       self::invalidate_cache();
-      if (class_exists('EUM_Taxonomies')) {
-        foreach ($allowed_paths as $term_id) {
-          EUM_Taxonomies::sync_users_for_term('eum_job_path', (int)$term_id, get_current_user_id(), 'Job Title Update');
-        }
-      }
-      wp_safe_redirect(add_query_arg(array_merge($redirect_args, ['updated' => ($action === 'update' ? 'updated' : 'created')]), admin_url('admin.php')));
-      exit;
+    } catch (\Throwable $e) {
+      if ($action !== 'update') wp_delete_post($post_id, true);
+      if (function_exists('eum_log_message')) eum_log_message('[EUM Job Titles] Save failed after post creation: ' . $e->getMessage());
+      $this->redirect_with_save_error($e->getMessage());
     }
 
-    wp_safe_redirect(add_query_arg(array_merge($redirect_args, ['updated' => 'error']), admin_url('admin.php')));
+    // New titles cannot have assigned users yet. On edits, defer path-wide
+    // recalculation so the save request stays fast and always redirects.
+    $sync_count = $action === 'update'
+      ? $this->schedule_path_user_sync($affected_paths, get_current_user_id(), 'Job Title Update')
+      : 0;
+    wp_safe_redirect(add_query_arg(array_merge($redirect_args, [
+      'updated' => ($action === 'update' ? 'updated' : 'created'),
+      'sync_queued' => $sync_count,
+    ]), admin_url('admin.php')));
     exit;
   }
 
@@ -270,6 +337,12 @@ class EUM_Job_Titles {
     }
 
     $updated = sanitize_key((string)($_GET['updated'] ?? ''));
+    $save_error_detail = '';
+    if ($updated === 'error') {
+      $transient_key = 'eum_job_title_save_error_' . (int)get_current_user_id();
+      $save_error_detail = (string)get_transient($transient_key);
+      delete_transient($transient_key);
+    }
     $messages = [
       'created' => 'Job title created.',
       'updated' => 'Job title updated.',
@@ -287,7 +360,12 @@ class EUM_Job_Titles {
     echo '<div class="wrap"><h1>Job Titles</h1>';
     if ($updated !== '' && isset($messages[$updated])) {
       $class = in_array($updated, ['missing_title', 'missing_paths', 'error'], true) ? 'notice notice-error' : 'notice notice-success';
-      echo '<div class="' . esc_attr($class) . '"><p>' . esc_html($messages[$updated]) . '</p></div>';
+      echo '<div class="' . esc_attr($class) . '"><p>' . esc_html($messages[$updated]);
+      if ($updated === 'error' && $save_error_detail !== '') echo ' Details: ' . esc_html($save_error_detail);
+      echo '</p></div>';
+    }
+    if (isset($_GET['sync_queued']) && (int)$_GET['sync_queued'] > 0) {
+      echo '<div class="notice notice-info"><p>Background classification sync queued for ' . (int)$_GET['sync_queued'] . ' user(s).</p></div>';
     }
 
     echo '<p>Create reusable job titles here. Titles can be attached to multiple Job Paths, can reuse the same visible name, and can carry default Groups and Projects.</p>';
@@ -297,6 +375,7 @@ class EUM_Job_Titles {
     echo '<h2 style="margin-top:0;">' . ($edit_post ? 'Edit Job Title' : 'Add Job Title') . '</h2>';
     echo '<form method="post">';
     wp_nonce_field('eum_job_titles_save');
+    echo '<input type="hidden" name="eum_job_title_action" value="' . ($edit_post ? 'update' : 'create') . '">';
     echo '<input type="hidden" name="job_title_id" value="' . (int)$edit_id . '">';
     echo '<p><label><strong>Job Title Name</strong></label><br><input type="text" name="job_title_name" value="' . esc_attr($name) . '" class="regular-text" style="width:100%;max-width:420px;" required></p>';
     if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::render_job_title_fields($edit_id);
