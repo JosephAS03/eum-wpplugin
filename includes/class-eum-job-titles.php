@@ -17,6 +17,9 @@ class EUM_Job_Titles {
     add_action(self::USER_SYNC_HOOK, [$this, 'process_user_sync_batch'], 10, 3);
     if (is_admin()) {
       add_action('admin_menu', [$this, 'menu'], 30);
+      // Process form submissions before wp-admin renders its header, so
+      // redirects and validation feedback are sent before output begins.
+      add_action('admin_init', [$this, 'handle_actions']);
     }
   }
 
@@ -248,9 +251,11 @@ class EUM_Job_Titles {
     return $html;
   }
 
-  private function handle_actions(): void {
-    if (!class_exists('EUM_Access') || !EUM_Access::current_user_is_it()) return;
+  public function handle_actions(): void {
+    if (sanitize_key((string)($_GET['page'] ?? '')) !== 'eum-job-titles') return;
+    if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? '')) !== 'POST') return;
     if (empty($_POST['eum_job_title_action'])) return;
+    if (!class_exists('EUM_Access') || !EUM_Access::current_user_is_it()) return;
     check_admin_referer('eum_job_titles_save');
 
     $action = sanitize_key((string)$_POST['eum_job_title_action']);
@@ -327,7 +332,6 @@ class EUM_Job_Titles {
 
   public function render_page(): void {
     if (!class_exists('EUM_Access') || !EUM_Access::current_user_is_it()) wp_die('Not allowed.');
-    $this->handle_actions();
 
     $edit_id = isset($_GET['edit']) ? (int)$_GET['edit'] : 0;
     $edit_post = $edit_id > 0 ? get_post($edit_id) : null;
