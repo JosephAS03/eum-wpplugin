@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "EUM Click-to-Login",
+  "version": "1.0.2",
+  "description": "Launch assigned work apps without displaying saved login credentials.",
+  "permissions": ["scripting", "storage", "tabs"],
+  "host_permissions": ["https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://internal.jas.enterprises/*"],
+      "js": ["portal-content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "EUM Click-to-Login" }
+}

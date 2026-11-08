@@ -1,0 +1,1264 @@
+<?php
+if (!defined('ABSPATH')) exit;
+
+class EUM_Timeclock {
+  public const CPT_ENTRY = 'eum_time_entry';
+
+  public const META_USER_ID = '_eum_time_user_id';
+  public const META_START_UTC = '_eum_time_start_utc';
+  public const META_END_UTC = '_eum_time_end_utc';
+  public const META_SOURCE = '_eum_time_source';
+  public const META_UPDATED_BY = '_eum_time_updated_by';
+  public const META_UPDATED_AT = '_eum_time_updated_at';
+
+  public const META_COMP_TYPE = '_eum_compensation_type';
+  public const META_COMP_AMOUNT = '_eum_compensation_amount';
+  public const META_COMP_UNPAID_LABEL = '_eum_compensation_unpaid_label';
+  public const META_COMP_EFFECTIVE_AT = '_eum_compensation_effective_at';
+  public const META_COMP_LAST_RAISE_AT = '_eum_compensation_last_raise_at';
+  public const META_COMP_UPDATED_BY = '_eum_compensation_updated_by';
+  public const META_COMP_UPDATED_AT = '_eum_compensation_updated_at';
+
+  public const FIELD_COMP_TYPE = 'system:eum_compensation_type';
+  public const FIELD_COMP_AMOUNT = 'system:eum_compensation_amount';
+  public const FIELD_COMP_UNPAID_LABEL = 'system:eum_compensation_unpaid_label';
+
+  private const DEFAULT_TIMEZONE = 'America/New_York';
+  private const HOURS_PER_DAY_RATE_DAY = 12;
+  private const REGULAR_WEEKLY_HOURS = 40;
+
+  public function init(): void {
+    add_action('init', [$this, 'register_cpt']);
+
+    add_action('admin_post_eum_timeclock_clock_in', [$this, 'handle_clock_in']);
+    add_action('admin_post_eum_timeclock_clock_out', [$this, 'handle_clock_out']);
+    add_action('admin_post_eum_timeclock_save_entry', [$this, 'handle_save_entry']);
+    add_action('admin_post_eum_timeclock_delete_entry', [$this, 'handle_delete_entry']);
+    add_action('admin_post_eum_compensation_save', [$this, 'handle_compensation_save']);
+
+    add_shortcode('eum_timeclock', [$this, 'shortcode_timeclock']);
+    add_shortcode('eum_timecard', [$this, 'shortcode_timecard']);
+    add_shortcode('eum_manager_timecards', [$this, 'shortcode_manager_timecards']);
+  }
+
+  public function register_cpt(): void {
+    register_post_type(self::CPT_ENTRY, [
+      'labels' => [
+        'name' => 'Time Entries',
+        'singular_name' => 'Time Entry',
+      ],
+      'public' => false,
+      'show_ui' => false,
+      'show_in_menu' => false,
+      'supports' => ['title', 'author'],
+      'capability_type' => 'post',
+      'map_meta_cap' => true,
+    ]);
+  }
+
+  public static function compensation_type_options(): array {
+    return [
+      'unpaid' => 'Unpaid',
+      'hourly' => 'Hourly',
+      'day_rate' => 'Day Rate',
+      'monthly' => 'Monthly',
+      'yearly' => 'Yearly',
+    ];
+  }
+
+  public static function normalize_compensation_type($value): string {
+    $value = sanitize_key(is_scalar($value) ? (string)$value : '');
+    return array_key_exists($value, self::compensation_type_options()) ? $value : 'unpaid';
+  }
+
+  public static function compensation_type_label(string $value): string {
+    $options = self::compensation_type_options();
+    return (string)($options[self::normalize_compensation_type($value)] ?? 'Unpaid');
+  }
+
+  public static function compensation_field_ids(): array {
+    return [self::FIELD_COMP_TYPE, self::FIELD_COMP_AMOUNT, self::FIELD_COMP_UNPAID_LABEL];
+  }
+
+  public static function normalized_compensation_payload_from_array(array $payload): array {
+    $type = self::normalize_compensation_type($payload[self::FIELD_COMP_TYPE] ?? ($payload['type'] ?? 'unpaid'));
+    $amount = self::sanitize_money($payload[self::FIELD_COMP_AMOUNT] ?? ($payload['amount'] ?? '0'));
+    $unpaid_label = sanitize_text_field((string)($payload[self::FIELD_COMP_UNPAID_LABEL] ?? ($payload['unpaid_label'] ?? '')));
+
+    if ($type === 'unpaid') {
+      $amount = 0.0;
+    }
+
+    return [
+      self::FIELD_COMP_TYPE => $type,
+      self::FIELD_COMP_AMOUNT => $amount,
+      self::FIELD_COMP_UNPAID_LABEL => $unpaid_label,
+    ];
+  }
+
+  public static function compensation_payload_from_request(array $source, string $prefix = 'eum_comp'): array {
+    $raw = isset($source[$prefix]) && is_array($source[$prefix]) ? wp_unslash($source[$prefix]) : [];
+    return self::normalized_compensation_payload_from_array([
+      self::FIELD_COMP_TYPE => $raw['type'] ?? 'unpaid',
+      self::FIELD_COMP_AMOUNT => $raw['amount'] ?? '0',
+      self::FIELD_COMP_UNPAID_LABEL => $raw['unpaid_label'] ?? '',
+    ]);
+  }
+
+  public static function compensation_for_user(int $user_id): array {
+    $type = self::normalize_compensation_type((string)get_user_meta($user_id, self::META_COMP_TYPE, true));
+    $amount = self::sanitize_money(get_user_meta($user_id, self::META_COMP_AMOUNT, true));
+    $unpaid_label = sanitize_text_field((string)get_user_meta($user_id, self::META_COMP_UNPAID_LABEL, true));
+    $effective_at = EUM_Profiles::parse_datetime_local((string)get_user_meta($user_id, self::META_COMP_EFFECTIVE_AT, true));
+    $last_raise_at = EUM_Profiles::parse_datetime_local((string)get_user_meta($user_id, self::META_COMP_LAST_RAISE_AT, true));
+    return self::decorate_compensation([
+      'type' => $type,
+      'amount' => $amount,
+      'unpaid_label' => $unpaid_label,
+      'effective_at' => $effective_at,
+      'last_raise_at' => $last_raise_at,
+    ]);
+  }
+
+  public static function compensation_summary(int $user_id): string {
+    return self::format_compensation_summary(self::compensation_for_user($user_id));
+  }
+
+  public static function compensation_detail_lines(int $user_id): array {
+    return self::compensation_detail_lines_from_data(self::compensation_for_user($user_id));
+  }
+
+  public static function compensation_profile_rows_html(int $user_id): string {
+    $lines = self::compensation_detail_lines($user_id);
+    if (empty($lines)) return '';
+    ob_start();
+    foreach ($lines as $label => $value) {
+      if ($value === '') continue;
+      echo '<dt style="font-weight:600;">' . esc_html($label) . '</dt>';
+      echo '<dd style="margin:0;">' . esc_html($value) . '</dd>';
+    }
+    return ob_get_clean();
+  }
+
+  public static function render_compensation_inputs(string $prefix = 'eum_comp', array $current = [], array $options = []): string {
+    $payload = self::normalized_compensation_payload_from_array($current);
+    $show_title = !array_key_exists('show_title', $options) || !empty($options['show_title']);
+    $title = (string)($options['title'] ?? 'Compensation');
+    $description = (string)($options['description'] ?? 'Set the pay frequency and amount used for earned-accrual calculations. Hourly and Day Rate automatically pay overtime at time-and-a-half after 40 hours in a Sunday–Saturday workweek.');
+    $prefix_attr = esc_attr($prefix);
+
+    ob_start();
+    echo '<div class="eum-compensation-fields" style="margin:18px 0 8px;padding-top:14px;border-top:1px solid #e2e4e7;">';
+    if ($show_title) {
+      echo '<h4 style="margin:0 0 8px;">' . esc_html($title) . '</h4>';
+      if ($description !== '') echo '<p class="description">' . esc_html($description) . '</p>';
+    }
+
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Pay Frequency</label>';
+    echo '<select name="' . $prefix_attr . '[type]" style="width:100%;max-width:320px;">';
+    foreach (self::compensation_type_options() as $value => $label) {
+      echo '<option value="' . esc_attr($value) . '" ' . selected($payload[self::FIELD_COMP_TYPE], $value, false) . '>' . esc_html($label) . '</option>';
+    }
+    echo '</select></p>';
+
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Pay Amount</label>';
+    echo '<input type="number" step="0.01" min="0" name="' . $prefix_attr . '[amount]" value="' . esc_attr(number_format((float)$payload[self::FIELD_COMP_AMOUNT], 2, '.', '')) . '" style="width:100%;max-width:220px;">';
+    echo '<br><span class="description">Hourly = per hour, Day Rate = per day, Monthly = per month, Yearly = per year.</span></p>';
+
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Unpaid Label / Reason</label>';
+    echo '<input type="text" name="' . $prefix_attr . '[unpaid_label]" value="' . esc_attr((string)$payload[self::FIELD_COMP_UNPAID_LABEL]) . '" style="width:100%;max-width:420px;" placeholder="Optional reason, e.g. Volunteer or Internship">';
+    echo '<br><span class="description">Only used when Pay Frequency is Unpaid.</span></p>';
+
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  public static function render_compensation_section(int $target_user_id, int $actor_user_id, string $return_url): string {
+    $current = self::compensation_for_user($target_user_id);
+    $can_manage = self::can_manage_compensation($actor_user_id, $target_user_id);
+    $editable_change = self::editable_compensation_change_for_user($target_user_id, $actor_user_id);
+    $prefill = [
+      self::FIELD_COMP_TYPE => $current['type'],
+      self::FIELD_COMP_AMOUNT => $current['amount'],
+      self::FIELD_COMP_UNPAID_LABEL => $current['unpaid_label'],
+    ];
+    $effective_value = '';
+
+    if ($editable_change > 0) {
+      $after = get_post_meta($editable_change, EUM_Profiles::META_AFTER, true);
+      $after = is_array($after) ? $after : [];
+      $prefill = array_merge($prefill, self::normalized_compensation_payload_from_array($after));
+      $effective_at = EUM_Profiles::parse_datetime_local((string)get_post_meta($editable_change, EUM_Profiles::META_EFFECTIVE_AT, true));
+      $effective_value = $effective_at !== '' ? str_replace(' ', 'T', substr($effective_at, 0, 16)) : '';
+    }
+
+    $rule = self::compensation_rule_context($actor_user_id, $target_user_id, self::normalized_compensation_payload_from_array($prefill));
+
+    ob_start();
+    echo '<div class="eum-private-profile__section">';
+    echo '<h4 style="margin-top:0;">Compensation</h4>';
+    echo '<p><strong>Current Compensation:</strong> ' . esc_html(self::format_compensation_summary($current)) . '</p>';
+
+    if (!$can_manage) {
+      echo '<p class="description">Managers can update compensation for their own direct reports. HR and IT can update compensation for any user.</p>';
+      echo '</div>';
+      return ob_get_clean();
+    }
+
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="eum_compensation_save">';
+    echo '<input type="hidden" name="target_user_id" value="' . (int)$target_user_id . '">';
+    echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+    if ($editable_change > 0) echo '<input type="hidden" name="change_id" value="' . (int)$editable_change . '">';
+    wp_nonce_field('eum_compensation_save_' . $target_user_id, 'eum_compensation_nonce');
+
+    echo self::render_compensation_inputs('eum_comp', $prefill, [
+      'show_title' => false,
+    ]);
+
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Effective At</label>';
+    echo '<input type="datetime-local" name="eum_comp_effective_at" value="' . esc_attr($effective_value) . '" style="width:100%;max-width:320px;">';
+    echo '<br><span class="description">Leave blank to apply immediately. Future dates schedule the change to apply later.</span></p>';
+
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Reason</label>';
+    echo '<input type="text" name="eum_comp_reason" value="" style="width:100%;max-width:420px;" placeholder="Compensation Update"></p>';
+
+    echo '<p class="description">Managers can set compensation immediately for new hires or other initial setups. Later raises above 15%, or raises inside a 3-month window, route to second-level approval.</p>';
+    if (!empty($rule['requires_approval'])) {
+      $labels = array_map(['EUM_Profiles', 'manager_user_name'], (array)($rule['approver_ids'] ?? []));
+      $labels = array_values(array_filter($labels));
+      if (!empty($labels)) {
+        echo '<p class="description">This compensation change requires second-level approval from: ' . esc_html(implode(', ', $labels)) . '.</p>';
+      } else {
+        echo '<p class="description">This compensation change requires second-level approval. If no approver resolves automatically, HR or IT can approve it.</p>';
+      }
+      if (!empty($rule['reasons'])) {
+        echo '<p class="description">Triggered because: ' . esc_html(implode('; ', (array)$rule['reasons'])) . '.</p>';
+      }
+    } else {
+      echo '<p class="description">This compensation change can be applied or scheduled without second-level approval.</p>';
+    }
+
+    echo '<p><button type="submit" class="button button-primary">Save Compensation</button></p>';
+    echo '</form>';
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  public static function compensation_rule_context(int $actor_user_id, int $target_user_id, array $proposed_payload): array {
+    $current = self::compensation_for_user($target_user_id);
+    $proposed = self::decorate_compensation([
+      'type' => self::normalize_compensation_type($proposed_payload[self::FIELD_COMP_TYPE] ?? 'unpaid'),
+      'amount' => self::sanitize_money($proposed_payload[self::FIELD_COMP_AMOUNT] ?? 0),
+      'unpaid_label' => sanitize_text_field((string)($proposed_payload[self::FIELD_COMP_UNPAID_LABEL] ?? '')),
+      'effective_at' => '',
+      'last_raise_at' => '',
+    ]);
+
+    $current_annual = (float)$current['annualized_amount'];
+    $proposed_annual = (float)$proposed['annualized_amount'];
+    $raise_ratio = ($current_annual > 0 && $proposed_annual > $current_annual)
+      ? ($proposed_annual / $current_annual)
+      : 1.0;
+
+    $requires_approval = false;
+    $reasons = [];
+
+    if ($current_annual > 0 && $proposed_annual > $current_annual * 1.15) {
+      $requires_approval = true;
+      $reasons[] = 'increase exceeds 15% of the current annualized compensation';
+    }
+
+    if ($proposed_annual > $current_annual) {
+      $last_raise_at = EUM_Profiles::parse_datetime_local((string)($current['last_raise_at'] ?? ''));
+      if ($last_raise_at !== '') {
+        $last_raise_ts = strtotime(get_gmt_from_date($last_raise_at));
+        if ($last_raise_ts > 0 && $last_raise_ts > (time() - (90 * DAY_IN_SECONDS))) {
+          $requires_approval = true;
+          $reasons[] = 'the last raise was less than 3 months ago';
+        }
+      }
+    }
+
+    $approver_ids = [];
+    if ($requires_approval && !EUM_Access::is_it_or_hr($actor_user_id) && class_exists('EUM_Manager_IDs')) {
+      $approver_ids = array_values(array_unique(array_filter(array_map('intval', EUM_Manager_IDs::manager_user_ids_for_subject_user($actor_user_id)), static fn($uid) => $uid > 0 && $uid !== $actor_user_id && $uid !== $target_user_id)));
+      if (empty($approver_ids) && class_exists('EUM_Profiles')) {
+        $approver_ids = EUM_Profiles::approver_ids_for_actor($actor_user_id, $target_user_id);
+      }
+    }
+
+    return [
+      'requires_approval' => $requires_approval,
+      'reasons' => $reasons,
+      'approver_ids' => $approver_ids,
+      'current' => $current,
+      'proposed' => $proposed,
+      'raise_ratio' => $raise_ratio,
+    ];
+  }
+
+  public static function can_manage_compensation(int $actor_user_id, int $target_user_id): bool {
+    if ($actor_user_id <= 0 || $target_user_id <= 0) return false;
+    if (EUM_Access::is_it_or_hr($actor_user_id)) return true;
+    if (!class_exists('EUM_Manager_IDs')) return false;
+    return EUM_Manager_IDs::user_is_direct_manager_of_user($actor_user_id, $target_user_id) || EUM_Profiles::is_pending_manager_for_target($actor_user_id, $target_user_id);
+  }
+
+  public static function apply_compensation_payload_to_user(int $user_id, array $payload, int $actor_user_id = 0, string $effective_at = ''): void {
+    $current = self::compensation_for_user($user_id);
+    $normalized = self::normalized_compensation_payload_from_array($payload);
+    $new = self::decorate_compensation([
+      'type' => $normalized[self::FIELD_COMP_TYPE],
+      'amount' => $normalized[self::FIELD_COMP_AMOUNT],
+      'unpaid_label' => $normalized[self::FIELD_COMP_UNPAID_LABEL],
+      'effective_at' => EUM_Profiles::parse_datetime_local($effective_at),
+      'last_raise_at' => (string)($current['last_raise_at'] ?? ''),
+    ]);
+
+    update_user_meta($user_id, self::META_COMP_TYPE, $new['type']);
+    update_user_meta($user_id, self::META_COMP_AMOUNT, $new['amount']);
+    if ($new['unpaid_label'] !== '') update_user_meta($user_id, self::META_COMP_UNPAID_LABEL, $new['unpaid_label']);
+    else delete_user_meta($user_id, self::META_COMP_UNPAID_LABEL);
+
+    $effective_value = $new['effective_at'] !== '' ? $new['effective_at'] : current_time('mysql');
+    update_user_meta($user_id, self::META_COMP_EFFECTIVE_AT, $effective_value);
+    update_user_meta($user_id, self::META_COMP_UPDATED_AT, current_time('mysql'));
+    if ($actor_user_id > 0) update_user_meta($user_id, self::META_COMP_UPDATED_BY, $actor_user_id);
+
+    if ($new['annualized_amount'] > (float)$current['annualized_amount']) {
+      update_user_meta($user_id, self::META_COMP_LAST_RAISE_AT, $effective_value);
+    }
+  }
+
+  public function shortcode_timeclock($atts = []): string {
+    if (!is_user_logged_in()) return '<div class="eum-timeclock"><p>You must be logged in to use the timeclock.</p></div>';
+    $atts = shortcode_atts([
+      'show_clock' => '1',
+      'show_history' => '1',
+    ], (array)$atts, 'eum_timeclock');
+
+    $user_id = get_current_user_id();
+    return $this->render_timecard_portal($user_id, $user_id, [
+      'show_clock' => !empty($atts['show_clock']) && $atts['show_clock'] !== '0',
+      'allow_manager_edit' => false,
+      'manager_mode' => false,
+      'allow_user_picker' => false,
+    ]);
+  }
+
+  public function shortcode_timecard($atts = []): string {
+    $atts = shortcode_atts(['show_clock' => '0'], (array)$atts, 'eum_timecard');
+    return $this->shortcode_timeclock($atts);
+  }
+
+  public function shortcode_manager_timecards($atts = []): string {
+    if (!is_user_logged_in()) return '<div class="eum-timeclock"><p>You must be logged in to view team timecards.</p></div>';
+    $actor_user_id = get_current_user_id();
+    if (!(EUM_Access::is_it_or_hr($actor_user_id) || EUM_Access::is_manager_user($actor_user_id))) {
+      return '<div class="eum-timeclock"><p>You do not have access to team timecards.</p></div>';
+    }
+
+    $levels = class_exists('EUM_Manager_IDs') ? EUM_Manager_IDs::managed_user_levels_for_manager_user($actor_user_id, true, true) : [];
+    $managed_user_ids = array_values(array_unique(array_filter(array_map('intval', array_keys($levels)))));
+    if (EUM_Access::is_it_or_hr($actor_user_id) && empty($managed_user_ids)) {
+      $managed_user_ids = array_values(array_map(static fn($u) => (int)$u->ID, get_users(['fields' => ['ID'], 'number' => 5000])));
+    }
+    if (empty($managed_user_ids)) {
+      return '<div class="eum-timeclock"><p>No team members are available for timecard review.</p></div>';
+    }
+
+    $selected_user_id = isset($_GET['eum_time_user']) ? (int)$_GET['eum_time_user'] : (int)$managed_user_ids[0];
+    if (!in_array($selected_user_id, $managed_user_ids, true) && !EUM_Access::is_it_or_hr($actor_user_id)) {
+      $selected_user_id = (int)$managed_user_ids[0];
+    }
+
+    return $this->render_timecard_portal($selected_user_id, $actor_user_id, [
+      'show_clock' => false,
+      'allow_manager_edit' => true,
+      'manager_mode' => true,
+      'allow_user_picker' => true,
+      'managed_user_ids' => $managed_user_ids,
+      'managed_levels' => $levels,
+    ]);
+  }
+
+  private function render_timecard_portal(int $target_user_id, int $viewer_user_id, array $options = []): string {
+    if ($target_user_id <= 0) return '<div class="eum-timeclock"><p>User not found.</p></div>';
+    if (!$this->can_view_timecard($viewer_user_id, $target_user_id)) {
+      return '<div class="eum-timeclock"><p>You do not have permission to view this timecard.</p></div>';
+    }
+
+    $tz = $this->user_timezone($target_user_id);
+    [$default_start, $default_end] = $this->default_timecard_dates($target_user_id);
+    $start_date = isset($_GET['eum_time_start']) ? preg_replace('/[^0-9\-]/', '', (string)$_GET['eum_time_start']) : $default_start;
+    $end_date = isset($_GET['eum_time_end']) ? preg_replace('/[^0-9\-]/', '', (string)$_GET['eum_time_end']) : $default_end;
+    if ($start_date === '') $start_date = $default_start;
+    if ($end_date === '') $end_date = $start_date;
+    if ($end_date < $start_date) $end_date = $start_date;
+
+    [$range_start_utc, $range_end_utc, $range_start_local, $range_end_local] = $this->date_range_to_utc($target_user_id, $start_date, $end_date);
+    [$analysis_start_utc, $analysis_end_utc] = $this->analysis_range_for_date_range($target_user_id, $start_date, $end_date);
+
+    $entries = $this->entries_for_user_between($target_user_id, $analysis_start_utc, $analysis_end_utc);
+    $metrics = $this->build_timecard_metrics($target_user_id, $entries, $range_start_utc, $range_end_utc, $analysis_start_utc, $analysis_end_utc);
+    $target_user = get_user_by('id', $target_user_id);
+    $can_edit = !empty($options['allow_manager_edit']) && $this->can_edit_timecard($viewer_user_id, $target_user_id);
+    $show_clock = !empty($options['show_clock']) && $viewer_user_id === $target_user_id;
+    $current_url = $this->current_url();
+    $notice = $this->timeclock_notice_html();
+
+    ob_start();
+    echo '<div class="eum-timeclock" style="max-width:1100px;">';
+    if ($notice !== '') echo $notice;
+
+    echo '<div style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;margin-bottom:18px;">';
+    echo '<h3 style="margin-top:0;">' . esc_html(!empty($options['manager_mode']) ? 'Team Timecards' : 'My Timeclock') . '</h3>';
+    echo '<form method="get" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">';
+    foreach ($_GET as $key => $value) {
+      $key = (string)$key;
+      if (in_array($key, ['eum_time_user', 'eum_time_start', 'eum_time_end'], true)) continue;
+      if (is_array($value)) continue;
+      echo '<input type="hidden" name="' . esc_attr($key) . '" value="' . esc_attr((string)$value) . '">';
+    }
+    if (!empty($options['allow_user_picker'])) {
+      $managed_user_ids = array_values(array_filter(array_map('intval', (array)($options['managed_user_ids'] ?? [])), static fn($id) => $id > 0));
+      $managed_levels = is_array($options['managed_levels'] ?? null) ? (array)$options['managed_levels'] : [];
+      echo '<label><span style="display:block;font-weight:600;margin-bottom:4px;">User</span><select name="eum_time_user" style="min-width:320px;">';
+      foreach ($managed_user_ids as $managed_user_id) {
+        $u = get_user_by('id', $managed_user_id);
+        if (!$u) continue;
+        $label = $u->display_name ?: $u->user_login;
+        $depth = isset($managed_levels[$managed_user_id]) ? (int)$managed_levels[$managed_user_id] : 1;
+        if ($depth > 1) $label .= ' · Level ' . $depth;
+        echo '<option value="' . (int)$managed_user_id . '" ' . selected($target_user_id, $managed_user_id, false) . '>' . esc_html($label) . '</option>';
+      }
+      echo '</select></label>';
+    }
+    echo '<label><span style="display:block;font-weight:600;margin-bottom:4px;">Start Date</span><input type="date" name="eum_time_start" value="' . esc_attr($start_date) . '"></label>';
+    echo '<label><span style="display:block;font-weight:600;margin-bottom:4px;">End Date</span><input type="date" name="eum_time_end" value="' . esc_attr($end_date) . '"></label>';
+    echo '<button type="submit" class="button button-primary">View Timecard</button>';
+    echo '</form>';
+    echo '<p class="description" style="margin:10px 0 0;">Timecards use the selected user\'s timezone: <strong>' . esc_html($tz->getName()) . '</strong>. Weekly overtime resets Sunday at 12:00 AM local time.</p>';
+    echo '</div>';
+
+    if ($show_clock) {
+      echo $this->render_clock_controls($target_user_id, $current_url, $tz);
+    }
+
+    echo '<div style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;margin-bottom:18px;">';
+    echo '<div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start;">';
+    echo '<div><h4 style="margin:0 0 6px;">' . esc_html(($target_user ? ($target_user->display_name ?: $target_user->user_login) : ('User #' . $target_user_id)) . ' Timecard') . '</h4>';
+    echo '<p style="margin:0;color:#50575e;">' . esc_html($range_start_local->format('M j, Y')) . ' – ' . esc_html($range_end_local->modify('-1 second')->format('M j, Y')) . '</p></div>';
+    echo '<div style="text-align:right;min-width:260px;">';
+    echo '<p style="margin:0 0 4px;"><strong>Compensation:</strong> ' . esc_html(self::format_compensation_summary($metrics['compensation'])) . '</p>';
+    echo '<p style="margin:0;"><strong>Earned Accrual:</strong> ' . esc_html($this->format_money($metrics['earnings'])) . '</p>';
+    echo '</div></div>';
+
+    echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:16px;">';
+    echo $this->stat_card('Worked Hours', number_format((float)$metrics['hours_total'], 2));
+    echo $this->stat_card('Regular Hours', number_format((float)$metrics['regular_hours'], 2));
+    echo $this->stat_card('Overtime Hours', number_format((float)$metrics['overtime_hours'], 2));
+    echo $this->stat_card('Shifts', (string)count($metrics['display_entries']));
+    echo '</div>';
+    echo '</div>';
+
+    if ($can_edit) {
+      echo $this->render_manual_entry_form($target_user_id, $current_url, $tz);
+    }
+
+    echo '<div style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;">';
+    echo '<h4 style="margin-top:0;">Entries</h4>';
+    if (empty($metrics['display_entries'])) {
+      echo '<p>No time entries were found in this range.</p>';
+    } else {
+      echo '<div style="overflow:auto;"><table class="widefat striped"><thead><tr><th>Start</th><th>End</th><th>Hours</th>' . ($can_edit ? '<th>Edit</th><th>Delete</th>' : '') . '</tr></thead><tbody>';
+      foreach ($metrics['display_entries'] as $entry) {
+        $entry_id = (int)$entry['id'];
+        echo '<tr>';
+        echo '<td>' . esc_html($entry['start_label']) . '</td>';
+        echo '<td>' . esc_html($entry['end_label']) . '</td>';
+        echo '<td>' . esc_html(number_format((float)$entry['hours'], 2)) . '</td>';
+        if ($can_edit) {
+          echo '<td>' . $this->render_entry_edit_form($entry_id, $target_user_id, $current_url, $entry['start_input'], $entry['end_input']) . '</td>';
+          echo '<td>' . $this->render_entry_delete_form($entry_id, $target_user_id, $current_url) . '</td>';
+        }
+        echo '</tr>';
+      }
+      echo '</tbody></table></div>';
+    }
+    echo '</div>';
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  private function render_clock_controls(int $user_id, string $return_url, DateTimeZone $tz): string {
+    $open_entry = $this->open_entry_for_user($user_id);
+    $now = new DateTimeImmutable('now', $tz);
+    ob_start();
+    echo '<div style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;margin-bottom:18px;">';
+    echo '<h4 style="margin-top:0;">Clock</h4>';
+    echo '<p class="description">Times are recorded in UTC and displayed here in ' . esc_html($tz->getName()) . '.</p>';
+
+    if ($open_entry) {
+      $start_utc = (int)get_post_meta((int)$open_entry->ID, self::META_START_UTC, true);
+      $start_local = (new DateTimeImmutable('@' . $start_utc))->setTimezone($tz);
+      $elapsed_hours = max(0, time() - $start_utc) / HOUR_IN_SECONDS;
+      echo '<p><strong>Clocked in since:</strong> ' . esc_html($start_local->format('M j, Y g:i A')) . ' · ' . esc_html(number_format($elapsed_hours, 2)) . ' hours elapsed</p>';
+      echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+      echo '<input type="hidden" name="action" value="eum_timeclock_clock_out">';
+      echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+      wp_nonce_field('eum_timeclock_clock_out', 'eum_timeclock_clock_out_nonce');
+      echo '<button type="submit" class="button button-primary">Clock Out</button>';
+      echo '</form>';
+    } else {
+      echo '<p><strong>Current time:</strong> ' . esc_html($now->format('M j, Y g:i A')) . '</p>';
+      echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+      echo '<input type="hidden" name="action" value="eum_timeclock_clock_in">';
+      echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+      wp_nonce_field('eum_timeclock_clock_in', 'eum_timeclock_clock_in_nonce');
+      echo '<button type="submit" class="button button-primary">Clock In</button>';
+      echo '</form>';
+    }
+
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  private function render_manual_entry_form(int $target_user_id, string $return_url, DateTimeZone $tz): string {
+    $now = new DateTimeImmutable('now', $tz);
+    $default_start = $now->setTime(9, 0);
+    $default_end = $now->setTime(17, 0);
+    ob_start();
+    echo '<div style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;margin-bottom:18px;">';
+    echo '<h4 style="margin-top:0;">Add Time Entry</h4>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">';
+    echo '<input type="hidden" name="action" value="eum_timeclock_save_entry">';
+    echo '<input type="hidden" name="target_user_id" value="' . (int)$target_user_id . '">';
+    echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+    wp_nonce_field('eum_timeclock_save_entry_' . $target_user_id, 'eum_timeclock_save_entry_nonce');
+    echo '<label><span style="display:block;font-weight:600;margin-bottom:4px;">Clock In</span><input type="datetime-local" name="entry_start" value="' . esc_attr($default_start->format('Y-m-d\TH:i')) . '" required></label>';
+    echo '<label><span style="display:block;font-weight:600;margin-bottom:4px;">Clock Out</span><input type="datetime-local" name="entry_end" value="' . esc_attr($default_end->format('Y-m-d\TH:i')) . '"></label>';
+    echo '<div style="flex:1 1 100%;margin-top:-2px;"><span class="description">Leave Clock Out blank to add an open shift for someone who is still working.</span></div>';
+    echo '<button type="submit" class="button">Add Entry</button>';
+    echo '</form>';
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  private function render_entry_edit_form(int $entry_id, int $target_user_id, string $return_url, string $start_input, string $end_input): string {
+    ob_start();
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end;">';
+    echo '<input type="hidden" name="action" value="eum_timeclock_save_entry">';
+    echo '<input type="hidden" name="entry_id" value="' . (int)$entry_id . '">';
+    echo '<input type="hidden" name="target_user_id" value="' . (int)$target_user_id . '">';
+    echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+    wp_nonce_field('eum_timeclock_save_entry_' . $target_user_id, 'eum_timeclock_save_entry_nonce');
+    echo '<label style="display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:#50575e;">Clock In<input type="datetime-local" name="entry_start" value="' . esc_attr($start_input) . '" style="max-width:180px;"></label>';
+    echo '<label style="display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:#50575e;">Clock Out<input type="datetime-local" name="entry_end" value="' . esc_attr($end_input) . '" style="max-width:180px;"></label>';
+    echo '<label style="display:flex;align-items:center;gap:4px;font-size:12px;"><input type="checkbox" name="clear_entry_end" value="1"> Reopen shift</label>';
+    echo '<button type="submit" class="button button-small">Save</button>';
+    echo '</form>';
+    return ob_get_clean();
+  }
+
+  private function render_entry_delete_form(int $entry_id, int $target_user_id, string $return_url): string {
+    ob_start();
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="eum_timeclock_delete_entry">';
+    echo '<input type="hidden" name="entry_id" value="' . (int)$entry_id . '">';
+    echo '<input type="hidden" name="target_user_id" value="' . (int)$target_user_id . '">';
+    echo '<input type="hidden" name="return_url" value="' . esc_attr($return_url) . '">';
+    wp_nonce_field('eum_timeclock_delete_entry_' . $entry_id, 'eum_timeclock_delete_entry_nonce');
+    echo '<button type="submit" class="button button-small" onclick="return confirm(&quot;Delete this time entry?&quot;)">Delete</button>';
+    echo '</form>';
+    return ob_get_clean();
+  }
+
+  public function handle_clock_in(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    if (!isset($_POST['eum_timeclock_clock_in_nonce']) || !wp_verify_nonce($_POST['eum_timeclock_clock_in_nonce'], 'eum_timeclock_clock_in')) wp_die('Security check failed.');
+    $user_id = get_current_user_id();
+    $return_url = esc_url_raw((string)($_POST['return_url'] ?? home_url('/')));
+    if ($this->open_entry_for_user($user_id)) {
+      $this->redirect_with_notice($return_url, 'You are already clocked in.', 'error');
+    }
+
+    $now = time();
+    $entry_id = $this->upsert_entry(0, $user_id, $now, 0, $user_id, 'clock');
+    if (is_wp_error($entry_id)) {
+      $this->redirect_with_notice($return_url, $entry_id->get_error_message(), 'error');
+    }
+    $this->redirect_with_notice($return_url, 'Clocked in.', 'success');
+  }
+
+  public function handle_clock_out(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    if (!isset($_POST['eum_timeclock_clock_out_nonce']) || !wp_verify_nonce($_POST['eum_timeclock_clock_out_nonce'], 'eum_timeclock_clock_out')) wp_die('Security check failed.');
+    $user_id = get_current_user_id();
+    $return_url = esc_url_raw((string)($_POST['return_url'] ?? home_url('/')));
+    $open_entry = $this->open_entry_for_user($user_id);
+    if (!$open_entry) {
+      $this->redirect_with_notice($return_url, 'There is no open shift to clock out.', 'error');
+    }
+
+    $start_utc = (int)get_post_meta((int)$open_entry->ID, self::META_START_UTC, true);
+    $entry_id = $this->upsert_entry((int)$open_entry->ID, $user_id, $start_utc, time(), $user_id, 'clock');
+    if (is_wp_error($entry_id)) {
+      $this->redirect_with_notice($return_url, $entry_id->get_error_message(), 'error');
+    }
+    $this->redirect_with_notice($return_url, 'Clocked out.', 'success');
+  }
+
+  public function handle_save_entry(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    $actor_user_id = get_current_user_id();
+    $target_user_id = (int)($_POST['target_user_id'] ?? 0);
+    $entry_id = (int)($_POST['entry_id'] ?? 0);
+    $return_url = esc_url_raw((string)($_POST['return_url'] ?? home_url('/')));
+    if (!isset($_POST['eum_timeclock_save_entry_nonce']) || !wp_verify_nonce($_POST['eum_timeclock_save_entry_nonce'], 'eum_timeclock_save_entry_' . $target_user_id)) wp_die('Security check failed.');
+    if (!$this->can_edit_timecard($actor_user_id, $target_user_id)) {
+      $this->redirect_with_notice($return_url, 'You do not have permission to edit this timecard.', 'error');
+    }
+
+    $tz = $this->user_timezone($target_user_id);
+    $start_value = trim((string)($_POST['entry_start'] ?? ''));
+    $end_value = trim((string)($_POST['entry_end'] ?? ''));
+    $clear_end = !empty($_POST['clear_entry_end']);
+
+    $existing_start_utc = 0;
+    $existing_end_utc = 0;
+    if ($entry_id > 0) {
+      $entry = get_post($entry_id);
+      if (!$entry || $entry->post_type !== self::CPT_ENTRY || (int)get_post_meta($entry_id, self::META_USER_ID, true) !== $target_user_id) {
+        $this->redirect_with_notice($return_url, 'Time entry not found.', 'error');
+      }
+      $existing_start_utc = (int)get_post_meta($entry_id, self::META_START_UTC, true);
+      $existing_end_utc = (int)get_post_meta($entry_id, self::META_END_UTC, true);
+    }
+
+    $start_utc = $start_value !== '' ? $this->local_input_to_utc($start_value, $tz) : $existing_start_utc;
+    $end_utc = $end_value !== '' ? $this->local_input_to_utc($end_value, $tz) : ($clear_end ? 0 : $existing_end_utc);
+
+    if ($start_utc <= 0) {
+      $this->redirect_with_notice($return_url, 'A valid clock-in time is required.', 'error');
+    }
+    if ($start_value !== '' && $start_utc <= 0) {
+      $this->redirect_with_notice($return_url, 'The clock-in time is invalid.', 'error');
+    }
+    if ($end_value !== '' && $end_utc <= 0) {
+      $this->redirect_with_notice($return_url, 'The clock-out time is invalid.', 'error');
+    }
+
+    $result = $this->upsert_entry($entry_id, $target_user_id, $start_utc, $end_utc, $actor_user_id, 'manager_edit');
+    if (is_wp_error($result)) {
+      $this->redirect_with_notice($return_url, $result->get_error_message(), 'error');
+    }
+    $success = $entry_id > 0 ? 'Time entry updated.' : ($end_utc > 0 ? 'Time entry added.' : 'Clock-in added. The shift is still open until a clock-out is entered.');
+    $this->redirect_with_notice($return_url, $success, 'success');
+  }
+
+  public function handle_delete_entry(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    $actor_user_id = get_current_user_id();
+    $entry_id = (int)($_POST['entry_id'] ?? 0);
+    $target_user_id = (int)($_POST['target_user_id'] ?? 0);
+    $return_url = esc_url_raw((string)($_POST['return_url'] ?? home_url('/')));
+    if (!isset($_POST['eum_timeclock_delete_entry_nonce']) || !wp_verify_nonce($_POST['eum_timeclock_delete_entry_nonce'], 'eum_timeclock_delete_entry_' . $entry_id)) wp_die('Security check failed.');
+    if (!$this->can_edit_timecard($actor_user_id, $target_user_id)) {
+      $this->redirect_with_notice($return_url, 'You do not have permission to delete this time entry.', 'error');
+    }
+
+    $entry = get_post($entry_id);
+    if (!$entry || $entry->post_type !== self::CPT_ENTRY || (int)get_post_meta($entry_id, self::META_USER_ID, true) !== $target_user_id) {
+      $this->redirect_with_notice($return_url, 'Time entry not found.', 'error');
+    }
+
+    wp_delete_post($entry_id, true);
+    $this->redirect_with_notice($return_url, 'Time entry deleted.', 'success');
+  }
+
+  public function handle_compensation_save(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    $actor_user_id = get_current_user_id();
+    $target_user_id = (int)($_POST['target_user_id'] ?? 0);
+    $return_url = esc_url_raw((string)($_POST['return_url'] ?? home_url('/')));
+    $change_id = (int)($_POST['change_id'] ?? 0);
+
+    if (!isset($_POST['eum_compensation_nonce']) || !wp_verify_nonce($_POST['eum_compensation_nonce'], 'eum_compensation_save_' . $target_user_id)) {
+      if (class_exists('EUM_Profiles')) {
+        $this->redirect_with_profile_notice($return_url, 'Security check failed.', 'error');
+      }
+      wp_die('Security check failed.');
+    }
+
+    if (!self::can_manage_compensation($actor_user_id, $target_user_id)) {
+      $this->redirect_with_profile_notice($return_url, 'You do not have permission to change compensation for this user.', 'error');
+    }
+
+    $payload = self::compensation_payload_from_request($_POST, 'eum_comp');
+    $before_user = self::compensation_for_user($target_user_id);
+    $before = [
+      self::FIELD_COMP_TYPE => $before_user['type'],
+      self::FIELD_COMP_AMOUNT => $before_user['amount'],
+      self::FIELD_COMP_UNPAID_LABEL => $before_user['unpaid_label'],
+    ];
+    $after = $payload;
+
+    if (wp_json_encode($before) === wp_json_encode($after)) {
+      $this->redirect_with_profile_notice($return_url, 'No compensation changes were detected.', 'error');
+    }
+
+    $effective_at = EUM_Profiles::parse_datetime_local((string)($_POST['eum_comp_effective_at'] ?? ''));
+    $reason = sanitize_text_field((string)($_POST['eum_comp_reason'] ?? 'Compensation Update'));
+    if ($reason === '') $reason = 'Compensation Update';
+
+    $rule = self::compensation_rule_context($actor_user_id, $target_user_id, $after);
+    $requires_approval = !EUM_Access::is_it_or_hr($actor_user_id) && !empty($rule['requires_approval']);
+    $approver_ids = $requires_approval ? array_values(array_unique(array_filter(array_map('intval', (array)($rule['approver_ids'] ?? [])), static fn($uid) => $uid > 0 && $uid !== $actor_user_id))) : [];
+    $status = $requires_approval ? 'pending' : ($effective_at !== '' ? 'scheduled' : 'applied');
+
+    $target_user = get_user_by('id', $target_user_id);
+    $title = 'Compensation Change - ' . ($target_user ? ($target_user->display_name ?: $target_user->user_login) : ('User #' . $target_user_id));
+
+    if ($change_id > 0) {
+      $change = get_post($change_id);
+      if (!$change || $change->post_type !== EUM_Profiles::CPT_CHANGE) {
+        $this->redirect_with_profile_notice($return_url, 'The pending compensation change could not be found.', 'error');
+      }
+      $existing_after = get_post_meta($change_id, EUM_Profiles::META_AFTER, true);
+      $existing_after = is_array($existing_after) ? $existing_after : [];
+      $non_comp = array_diff(array_keys($existing_after), self::compensation_field_ids());
+      if (!empty($non_comp)) {
+        $this->redirect_with_profile_notice($return_url, 'That pending change also includes non-compensation fields and cannot be overwritten here.', 'error');
+      }
+
+      update_post_meta($change_id, EUM_Profiles::META_ACTOR_USER, $actor_user_id);
+      update_post_meta($change_id, EUM_Profiles::META_APPROVER_IDS, $approver_ids);
+      update_post_meta($change_id, EUM_Profiles::META_BEFORE, $before);
+      update_post_meta($change_id, EUM_Profiles::META_AFTER, $after);
+      update_post_meta($change_id, EUM_Profiles::META_NOTE, $reason);
+      update_post_meta($change_id, EUM_Profiles::META_EFFECTIVE_AT, $effective_at);
+      update_post_meta($change_id, EUM_Profiles::META_OCCURRED_AT, current_time('mysql'));
+      update_post_meta($change_id, EUM_Profiles::META_STATUS, $status);
+      if ($status === 'applied') {
+        (new EUM_Profiles())->apply_change($change_id);
+      }
+      $this->redirect_with_profile_notice($return_url, $status === 'pending' ? 'Compensation change updated and re-submitted.' : ($status === 'scheduled' ? 'Compensation change updated and scheduled.' : 'Compensation updated.'), 'success');
+    }
+
+    $change_id = (int)wp_insert_post([
+      'post_type' => EUM_Profiles::CPT_CHANGE,
+      'post_status' => 'publish',
+      'post_title' => $title,
+      'post_author' => $actor_user_id,
+    ]);
+
+    if ($change_id <= 0) {
+      $this->redirect_with_profile_notice($return_url, 'Could not save the compensation change.', 'error');
+    }
+
+    update_post_meta($change_id, EUM_Profiles::META_TARGET_USER, $target_user_id);
+    update_post_meta($change_id, EUM_Profiles::META_ACTOR_USER, $actor_user_id);
+    update_post_meta($change_id, EUM_Profiles::META_APPROVER_IDS, $approver_ids);
+    update_post_meta($change_id, EUM_Profiles::META_BEFORE, $before);
+    update_post_meta($change_id, EUM_Profiles::META_AFTER, $after);
+    update_post_meta($change_id, EUM_Profiles::META_NOTE, $reason);
+    update_post_meta($change_id, EUM_Profiles::META_EFFECTIVE_AT, $effective_at);
+    update_post_meta($change_id, EUM_Profiles::META_OCCURRED_AT, current_time('mysql'));
+    update_post_meta($change_id, EUM_Profiles::META_STATUS, $status);
+    update_post_meta($change_id, EUM_Profiles::META_MANUAL, 0);
+
+    if ($status === 'applied') {
+      (new EUM_Profiles())->apply_change($change_id);
+      $this->redirect_with_profile_notice($return_url, 'Compensation updated.', 'success');
+    }
+
+    $this->redirect_with_profile_notice($return_url, $status === 'pending' ? 'Compensation change submitted for second-level approval.' : 'Compensation change scheduled.', 'success');
+  }
+
+  private static function editable_compensation_change_for_user(int $target_user_id, int $actor_user_id): int {
+    $items = get_posts([
+      'post_type' => EUM_Profiles::CPT_CHANGE,
+      'post_status' => 'publish',
+      'numberposts' => 20,
+      'orderby' => 'date',
+      'order' => 'DESC',
+      'meta_query' => [
+        ['key' => EUM_Profiles::META_TARGET_USER, 'value' => $target_user_id],
+        ['key' => EUM_Profiles::META_STATUS, 'value' => ['pending', 'scheduled'], 'compare' => 'IN'],
+      ],
+    ]);
+
+    foreach ((array)$items as $item) {
+      $after = get_post_meta((int)$item->ID, EUM_Profiles::META_AFTER, true);
+      $after = is_array($after) ? $after : [];
+      if (empty($after)) continue;
+      $keys = array_keys($after);
+      $non_comp = array_diff($keys, self::compensation_field_ids());
+      if (!empty($non_comp)) continue;
+      $change_actor = (int)get_post_meta((int)$item->ID, EUM_Profiles::META_ACTOR_USER, true);
+      if ($change_actor === $actor_user_id || EUM_Access::is_it_or_hr($actor_user_id)) {
+        return (int)$item->ID;
+      }
+    }
+
+    return 0;
+  }
+
+  private function entries_for_user_between(int $user_id, int $start_utc, int $end_utc): array {
+    if ($user_id <= 0) return [];
+    $items = get_posts([
+      'post_type' => self::CPT_ENTRY,
+      'post_status' => 'publish',
+      'numberposts' => -1,
+      'orderby' => 'meta_value_num',
+      'meta_key' => self::META_START_UTC,
+      'order' => 'ASC',
+      'meta_query' => [
+        ['key' => self::META_USER_ID, 'value' => $user_id],
+      ],
+    ]);
+
+    $out = [];
+    foreach ((array)$items as $item) {
+      $entry_user_id = (int)get_post_meta((int)$item->ID, self::META_USER_ID, true);
+      if ($entry_user_id !== $user_id) continue;
+      $entry_start = (int)get_post_meta((int)$item->ID, self::META_START_UTC, true);
+      $entry_end = (int)get_post_meta((int)$item->ID, self::META_END_UTC, true);
+      $compare_end = $entry_end > 0 ? $entry_end : time();
+      if ($entry_start >= $end_utc) continue;
+      if ($compare_end <= $start_utc) continue;
+      $out[] = $item;
+    }
+    usort($out, static function($a, $b) {
+      $a_start = (int)get_post_meta((int)$a->ID, self::META_START_UTC, true);
+      $b_start = (int)get_post_meta((int)$b->ID, self::META_START_UTC, true);
+      return $a_start <=> $b_start;
+    });
+    return $out;
+  }
+
+  private function build_timecard_metrics(int $user_id, array $entries, int $range_start_utc, int $range_end_utc, int $analysis_start_utc, int $analysis_end_utc): array {
+    $tz = $this->user_timezone($user_id);
+    $display_entries = [];
+    $pieces_by_week = [];
+    $boundaries = [$range_start_utc, $range_end_utc];
+
+    $week_cursor = $analysis_start_utc;
+    while ($week_cursor < $analysis_end_utc) {
+      $next = $this->next_local_week_boundary_utc($user_id, $week_cursor);
+      if ($next <= $week_cursor) break;
+      $boundaries[] = $week_cursor;
+      $boundaries[] = $next;
+      $week_cursor = $next;
+    }
+    $boundaries = array_values(array_unique(array_filter(array_map('intval', $boundaries), static fn($ts) => $ts > 0)));
+    sort($boundaries);
+
+    foreach ($entries as $item) {
+      $entry_id = (int)$item->ID;
+      $entry_start = (int)get_post_meta($entry_id, self::META_START_UTC, true);
+      $entry_end_raw = (int)get_post_meta($entry_id, self::META_END_UTC, true);
+      $entry_end = $entry_end_raw > 0 ? $entry_end_raw : time();
+      $clipped_start = max($entry_start, $analysis_start_utc);
+      $clipped_end = min($entry_end, $analysis_end_utc);
+      if ($clipped_end <= $clipped_start) continue;
+
+      $entry_display_start = max($entry_start, $range_start_utc);
+      $entry_display_end = min($entry_end, $range_end_utc);
+      if ($entry_display_end > $entry_display_start) {
+        $display_entries[] = [
+          'id' => $entry_id,
+          'start_label' => $this->format_local_ts($entry_display_start, $tz),
+          'end_label' => $entry_end_raw > 0 ? $this->format_local_ts($entry_display_end, $tz) : 'Open',
+          'hours' => max(0, $entry_display_end - $entry_display_start) / HOUR_IN_SECONDS,
+          'start_input' => $this->format_local_input($entry_start, $tz),
+          'end_input' => $entry_end_raw > 0 ? $this->format_local_input($entry_end_raw, $tz) : '',
+        ];
+      }
+
+      $segments = $this->split_interval_by_boundaries($clipped_start, $clipped_end, $boundaries);
+      foreach ($segments as $segment) {
+        $segment_start = (int)$segment['start'];
+        $segment_end = (int)$segment['end'];
+        if ($segment_end <= $segment_start) continue;
+        $week_key = $this->week_key_for_utc($user_id, $segment_start);
+        if (!isset($pieces_by_week[$week_key])) $pieces_by_week[$week_key] = [];
+        $pieces_by_week[$week_key][] = [
+          'start' => $segment_start,
+          'end' => $segment_end,
+          'in_display' => ($segment_start < $range_end_utc && $segment_end > $range_start_utc),
+        ];
+      }
+    }
+
+    $hours_total = 0.0;
+    $regular_hours = 0.0;
+    $overtime_hours = 0.0;
+
+    foreach ($pieces_by_week as $week_key => $pieces) {
+      usort($pieces, static fn($a, $b) => ((int)$a['start']) <=> ((int)$b['start']));
+      $cumulative_seconds = 0;
+      foreach ($pieces as $piece) {
+        $seconds = max(0, (int)$piece['end'] - (int)$piece['start']);
+        if ($seconds <= 0) continue;
+        $regular_remaining = max(0, (self::REGULAR_WEEKLY_HOURS * HOUR_IN_SECONDS) - $cumulative_seconds);
+        $regular_piece_seconds = min($seconds, $regular_remaining);
+        $overtime_piece_seconds = max(0, $seconds - $regular_piece_seconds);
+        if (!empty($piece['in_display'])) {
+          $hours_total += $seconds / HOUR_IN_SECONDS;
+          $regular_hours += $regular_piece_seconds / HOUR_IN_SECONDS;
+          $overtime_hours += $overtime_piece_seconds / HOUR_IN_SECONDS;
+        }
+        $cumulative_seconds += $seconds;
+      }
+    }
+
+    $compensation = self::compensation_for_user($user_id);
+    $earnings = $this->calculate_earnings_for_range($compensation, $regular_hours, $overtime_hours, $range_start_utc, $range_end_utc);
+
+    return [
+      'display_entries' => $display_entries,
+      'hours_total' => $hours_total,
+      'regular_hours' => $regular_hours,
+      'overtime_hours' => $overtime_hours,
+      'earnings' => $earnings,
+      'compensation' => $compensation,
+    ];
+  }
+
+  private function calculate_earnings_for_range(array $compensation, float $regular_hours, float $overtime_hours, int $range_start_utc, int $range_end_utc): float {
+    $type = (string)($compensation['type'] ?? 'unpaid');
+    $amount = (float)($compensation['amount'] ?? 0);
+    if ($type === 'hourly') {
+      return ($regular_hours * $amount) + ($overtime_hours * $amount * 1.5);
+    }
+    if ($type === 'day_rate') {
+      $hourly = (float)($compensation['hourly_rate'] ?? 0);
+      return ($regular_hours * $hourly) + ($overtime_hours * $hourly * 1.5);
+    }
+    if ($type === 'monthly' || $type === 'yearly') {
+      $seconds = max(0, $range_end_utc - $range_start_utc);
+      if ($seconds <= 0) return 0.0;
+      $annualized = (float)($compensation['annualized_amount'] ?? 0);
+      return $annualized * ($seconds / (365 * DAY_IN_SECONDS));
+    }
+    return 0.0;
+  }
+
+  private function upsert_entry(int $entry_id, int $user_id, int $start_utc, int $end_utc, int $actor_user_id, string $source = 'manual') {
+    if ($user_id <= 0) return new WP_Error('invalid_user', 'A valid user is required.');
+    if ($start_utc <= 0) return new WP_Error('invalid_start', 'A valid start time is required.');
+    if ($end_utc > 0 && $end_utc <= $start_utc) return new WP_Error('invalid_end', 'The end time must be later than the start time.');
+
+    $overlap = $this->find_overlapping_entry($user_id, $start_utc, $end_utc > 0 ? $end_utc : time(), $entry_id);
+    if ($overlap > 0) {
+      return new WP_Error('overlap', 'That time entry overlaps an existing shift.');
+    }
+
+    if ($entry_id > 0) {
+      $entry = get_post($entry_id);
+      if (!$entry || $entry->post_type !== self::CPT_ENTRY) return new WP_Error('missing_entry', 'The time entry no longer exists.');
+      wp_update_post([
+        'ID' => $entry_id,
+        'post_title' => 'Time Entry - User #' . $user_id . ' - ' . gmdate('Y-m-d H:i', $start_utc),
+      ]);
+    } else {
+      $entry_id = (int)wp_insert_post([
+        'post_type' => self::CPT_ENTRY,
+        'post_status' => 'publish',
+        'post_title' => 'Time Entry - User #' . $user_id . ' - ' . gmdate('Y-m-d H:i', $start_utc),
+        'post_author' => $actor_user_id > 0 ? $actor_user_id : $user_id,
+      ]);
+      if ($entry_id <= 0) return new WP_Error('entry_save_failed', 'Could not save the time entry.');
+    }
+
+    update_post_meta($entry_id, self::META_USER_ID, $user_id);
+    update_post_meta($entry_id, self::META_START_UTC, $start_utc);
+    if ($end_utc > 0) update_post_meta($entry_id, self::META_END_UTC, $end_utc);
+    else delete_post_meta($entry_id, self::META_END_UTC);
+    update_post_meta($entry_id, self::META_SOURCE, sanitize_key($source));
+    update_post_meta($entry_id, self::META_UPDATED_BY, $actor_user_id > 0 ? $actor_user_id : $user_id);
+    update_post_meta($entry_id, self::META_UPDATED_AT, current_time('mysql'));
+
+    return $entry_id;
+  }
+
+  private function find_overlapping_entry(int $user_id, int $start_utc, int $end_utc, int $exclude_entry_id = 0): int {
+    $entries = get_posts([
+      'post_type' => self::CPT_ENTRY,
+      'post_status' => 'publish',
+      'numberposts' => -1,
+      'fields' => 'ids',
+      'meta_query' => [
+        ['key' => self::META_USER_ID, 'value' => $user_id],
+      ],
+    ]);
+    foreach ((array)$entries as $entry_id) {
+      $entry_id = (int)$entry_id;
+      if ($exclude_entry_id > 0 && $entry_id === $exclude_entry_id) continue;
+      $entry_start = (int)get_post_meta($entry_id, self::META_START_UTC, true);
+      $entry_end_raw = (int)get_post_meta($entry_id, self::META_END_UTC, true);
+      $entry_end = $entry_end_raw > 0 ? $entry_end_raw : time();
+      if ($entry_start < $end_utc && $entry_end > $start_utc) return $entry_id;
+    }
+    return 0;
+  }
+
+  private function open_entry_for_user(int $user_id): ?WP_Post {
+    $entries = get_posts([
+      'post_type' => self::CPT_ENTRY,
+      'post_status' => 'publish',
+      'numberposts' => 10,
+      'orderby' => 'meta_value_num',
+      'meta_key' => self::META_START_UTC,
+      'order' => 'DESC',
+      'meta_query' => [
+        ['key' => self::META_USER_ID, 'value' => $user_id],
+      ],
+    ]);
+    foreach ((array)$entries as $entry) {
+      $end = (int)get_post_meta((int)$entry->ID, self::META_END_UTC, true);
+      if ($end <= 0) return $entry;
+    }
+    return null;
+  }
+
+  private function can_view_timecard(int $viewer_user_id, int $target_user_id): bool {
+    if ($viewer_user_id <= 0 || $target_user_id <= 0) return false;
+    if ($viewer_user_id === $target_user_id) return true;
+    if (EUM_Access::is_it_or_hr($viewer_user_id)) return true;
+    return class_exists('EUM_Manager_IDs') && EUM_Manager_IDs::user_is_manager_of_user($viewer_user_id, $target_user_id);
+  }
+
+  private function can_edit_timecard(int $viewer_user_id, int $target_user_id): bool {
+    if ($viewer_user_id <= 0 || $target_user_id <= 0) return false;
+    if (EUM_Access::is_it_or_hr($viewer_user_id)) return true;
+    return class_exists('EUM_Manager_IDs') && EUM_Manager_IDs::user_is_direct_manager_of_user($viewer_user_id, $target_user_id);
+  }
+
+  private function user_timezone(int $user_id): DateTimeZone {
+    $tz_string = '';
+    if ($user_id > 0) $tz_string = (string)get_user_meta($user_id, 'timezone', true);
+    if ($tz_string === '') $tz_string = (string)get_option('timezone_string', '');
+    if ($tz_string === '') $tz_string = self::DEFAULT_TIMEZONE;
+    try {
+      return new DateTimeZone($tz_string);
+    } catch (Throwable $e) {
+      return new DateTimeZone(self::DEFAULT_TIMEZONE);
+    }
+  }
+
+  private function default_timecard_dates(int $user_id): array {
+    $tz = $this->user_timezone($user_id);
+    $now = new DateTimeImmutable('now', $tz);
+    $week_start = $this->week_start_local($now);
+    $week_end = $week_start->modify('+6 days');
+    return [$week_start->format('Y-m-d'), $week_end->format('Y-m-d')];
+  }
+
+  private function date_range_to_utc(int $user_id, string $start_date, string $end_date): array {
+    $tz = $this->user_timezone($user_id);
+    $start_local = new DateTimeImmutable($start_date . ' 00:00:00', $tz);
+    $end_local = new DateTimeImmutable($end_date . ' 00:00:00', $tz);
+    $end_exclusive_local = $end_local->modify('+1 day');
+    return [
+      $start_local->setTimezone(new DateTimeZone('UTC'))->getTimestamp(),
+      $end_exclusive_local->setTimezone(new DateTimeZone('UTC'))->getTimestamp(),
+      $start_local,
+      $end_exclusive_local,
+    ];
+  }
+
+  private function analysis_range_for_date_range(int $user_id, string $start_date, string $end_date): array {
+    $tz = $this->user_timezone($user_id);
+    $start_local = new DateTimeImmutable($start_date . ' 00:00:00', $tz);
+    $end_local = new DateTimeImmutable($end_date . ' 00:00:00', $tz);
+    $analysis_start_local = $this->week_start_local($start_local);
+    $analysis_end_local = $this->week_start_local($end_local)->modify('+7 days');
+    return [
+      $analysis_start_local->setTimezone(new DateTimeZone('UTC'))->getTimestamp(),
+      $analysis_end_local->setTimezone(new DateTimeZone('UTC'))->getTimestamp(),
+    ];
+  }
+
+  private function week_start_local(DateTimeImmutable $local_dt): DateTimeImmutable {
+    $weekday = (int)$local_dt->format('w');
+    return $local_dt->setTime(0, 0, 0)->modify('-' . $weekday . ' days');
+  }
+
+  private function week_key_for_utc(int $user_id, int $utc_ts): string {
+    $tz = $this->user_timezone($user_id);
+    $local = (new DateTimeImmutable('@' . $utc_ts))->setTimezone($tz);
+    return $this->week_start_local($local)->format('Y-m-d');
+  }
+
+  private function next_local_week_boundary_utc(int $user_id, int $utc_ts): int {
+    $tz = $this->user_timezone($user_id);
+    $local = (new DateTimeImmutable('@' . $utc_ts))->setTimezone($tz);
+    $next_local = $this->week_start_local($local)->modify('+7 days');
+    return $next_local->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+  }
+
+  private function split_interval_by_boundaries(int $start_utc, int $end_utc, array $boundaries): array {
+    $points = [$start_utc, $end_utc];
+    foreach ($boundaries as $boundary) {
+      $boundary = (int)$boundary;
+      if ($boundary > $start_utc && $boundary < $end_utc) $points[] = $boundary;
+    }
+    $points = array_values(array_unique($points));
+    sort($points);
+    $segments = [];
+    for ($i = 0; $i < count($points) - 1; $i++) {
+      $segments[] = ['start' => (int)$points[$i], 'end' => (int)$points[$i + 1]];
+    }
+    return $segments;
+  }
+
+  private function local_input_to_utc(string $value, DateTimeZone $tz): int {
+    $value = trim($value);
+    if ($value === '') return 0;
+    try {
+      $dt = new DateTimeImmutable($value, $tz);
+      return $dt->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+    } catch (Throwable $e) {
+      return 0;
+    }
+  }
+
+  private function format_local_ts(int $utc_ts, DateTimeZone $tz): string {
+    return (new DateTimeImmutable('@' . $utc_ts))->setTimezone($tz)->format('M j, Y g:i A');
+  }
+
+  private function format_local_input(int $utc_ts, DateTimeZone $tz): string {
+    return (new DateTimeImmutable('@' . $utc_ts))->setTimezone($tz)->format('Y-m-d\TH:i');
+  }
+
+  private static function sanitize_money($value): float {
+    if (is_string($value)) $value = preg_replace('/[^0-9.\-]/', '', $value);
+    return round((float)$value, 2);
+  }
+
+  private static function decorate_compensation(array $data): array {
+    $type = self::normalize_compensation_type((string)($data['type'] ?? 'unpaid'));
+    $amount = self::sanitize_money($data['amount'] ?? 0);
+    $unpaid_label = sanitize_text_field((string)($data['unpaid_label'] ?? ''));
+    $annualized = 0.0;
+    $hourly_rate = 0.0;
+
+    switch ($type) {
+      case 'hourly':
+        $annualized = $amount * 40 * 52;
+        $hourly_rate = $amount;
+        break;
+      case 'day_rate':
+        $hourly_rate = $amount / self::HOURS_PER_DAY_RATE_DAY;
+        $annualized = $hourly_rate * 40 * 52;
+        break;
+      case 'monthly':
+        $annualized = $amount * 12;
+        break;
+      case 'yearly':
+        $annualized = $amount;
+        break;
+      default:
+        $annualized = 0.0;
+        $hourly_rate = 0.0;
+        break;
+    }
+
+    return [
+      'type' => $type,
+      'type_label' => self::compensation_type_label($type),
+      'amount' => $amount,
+      'unpaid_label' => $unpaid_label,
+      'annualized_amount' => round($annualized, 2),
+      'hourly_rate' => round($hourly_rate, 6),
+      'effective_at' => EUM_Profiles::parse_datetime_local((string)($data['effective_at'] ?? '')),
+      'last_raise_at' => EUM_Profiles::parse_datetime_local((string)($data['last_raise_at'] ?? '')),
+    ];
+  }
+
+  public static function format_compensation_summary(array $comp): string {
+    $comp = self::decorate_compensation($comp);
+    $type = (string)$comp['type'];
+    if ($type === 'unpaid') {
+      $suffix = $comp['unpaid_label'] !== '' ? ' · ' . $comp['unpaid_label'] : '';
+      return 'Unpaid' . $suffix;
+    }
+
+    $amount = self::money_string((float)$comp['amount']);
+    switch ($type) {
+      case 'hourly':
+        return $amount . ' / hour';
+      case 'day_rate':
+        return $amount . ' / day';
+      case 'monthly':
+        return $amount . ' / month';
+      case 'yearly':
+        return $amount . ' / year';
+    }
+
+    return $comp['type_label'];
+  }
+
+  private static function compensation_detail_lines_from_data(array $comp): array {
+    $comp = self::decorate_compensation($comp);
+    $lines = [
+      'Compensation Type' => $comp['type_label'],
+      'Compensation Amount' => self::format_compensation_summary($comp),
+    ];
+    if ($comp['type'] === 'day_rate') {
+      $lines['Day Rate Hourly Base'] = self::money_string((float)$comp['hourly_rate']) . ' / hour';
+    }
+    if ($comp['effective_at'] !== '') {
+      $lines['Compensation Effective At'] = $comp['effective_at'];
+    }
+    return $lines;
+  }
+
+  private function format_money(float $amount): string {
+    return self::money_string($amount);
+  }
+
+  private static function money_string(float $amount): string {
+    return '$' . number_format($amount, 2, '.', ',');
+  }
+
+  private function stat_card(string $label, string $value): string {
+    return '<div style="padding:14px;border:1px solid #e2e4e7;border-radius:8px;background:#f8f9fa;"><div style="font-size:12px;color:#50575e;">' . esc_html($label) . '</div><div style="font-size:24px;font-weight:700;line-height:1.2;">' . esc_html($value) . '</div></div>';
+  }
+
+  private function current_url(): string {
+    $scheme = is_ssl() ? 'https://' : 'http://';
+    $host = isset($_SERVER['HTTP_HOST']) ? sanitize_text_field(wp_unslash((string)$_SERVER['HTTP_HOST'])) : '';
+    $uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash((string)$_SERVER['REQUEST_URI']) : '/';
+    return esc_url_raw($scheme . $host . $uri);
+  }
+
+  private function redirect_with_notice(string $return_url, string $message, string $type = 'success'): void {
+    wp_safe_redirect(add_query_arg([
+      'eum_time_msg' => $message,
+      'eum_time_type' => sanitize_key($type),
+    ], $return_url));
+    exit;
+  }
+
+  private function redirect_with_profile_notice(string $base_url, string $msg, string $type): void {
+    wp_safe_redirect(add_query_arg([
+      'eum_profile_msg' => $msg,
+      'eum_profile_type' => sanitize_key($type),
+    ], $base_url));
+    exit;
+  }
+
+  private function timeclock_notice_html(): string {
+    $msg = isset($_GET['eum_time_msg']) ? sanitize_text_field(wp_unslash((string)$_GET['eum_time_msg'])) : '';
+    if ($msg === '') return '';
+    $type = isset($_GET['eum_time_type']) ? sanitize_key((string)$_GET['eum_time_type']) : 'success';
+    $bg = $type === 'error' ? '#fbeaea' : '#eef7ee';
+    $border = $type === 'error' ? '#d63638' : '#46b450';
+    return '<div style="background:' . esc_attr($bg) . ';border-left:4px solid ' . esc_attr($border) . ';padding:10px 12px;margin-bottom:16px;">' . esc_html($msg) . '</div>';
+  }
+}

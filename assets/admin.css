@@ -1,0 +1,2257 @@
+.eum-popup {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+}
+.eum-popup.is-open {
+  display: block;
+}
+.eum-popup__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.6);
+}
+.eum-popup__panel {
+  position: relative;
+  width: min(980px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  margin: 20px auto;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+}
+.eum-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  background: #fff;
+}
+.eum-popup__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.eum-popup__close {
+  border: 0;
+  background: transparent;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+.eum-popup__body {
+  padding: 20px;
+}
+body.eum-popup-open {
+  overflow: hidden;
+}
+.eum-popup-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #d0d7de;
+  background: #fff;
+  border-radius: 999px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.eum-popup-content .eum-log-entry {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.eum-log-entry__meta {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.eum-private-profile__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+.eum-private-profile__section {
+  border: 1px solid #dcdcde;
+  border-radius: 12px;
+  padding: 18px;
+  background: #fff;
+}
+.eum-personnel-files {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+}
+.eum-personnel-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+.eum-personnel-files__meta {
+  display: block;
+  color: #6b7280;
+  font-size: 12px;
+}
+.eum-org-chart {
+  border: 1px solid #dcdcde;
+  border-radius: 16px;
+  padding: 18px;
+  background: #fff;
+}
+.eum-org-chart__lane {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+}
+.eum-org-chart__focus-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 18px 0;
+}
+.eum-org-chart__connector {
+  width: 2px;
+  height: 24px;
+  background: #cbd5e1;
+  margin-bottom: 12px;
+}
+.eum-org-chart__card {
+  min-width: 220px;
+  max-width: 280px;
+  padding: 14px;
+  border: 1px solid #dbe2ea;
+  border-radius: 14px;
+  text-decoration: none;
+  color: inherit;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+.eum-org-chart__card.is-focus {
+  border-color: #1d4ed8;
+  box-shadow: 0 10px 26px rgba(29, 78, 216, 0.16);
+}
+.eum-org-chart__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.eum-org-chart__badge {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.eum-org-chart__name,
+.eum-org-chart__meta,
+.eum-org-chart__cta {
+  display: block;
+}
+.eum-org-chart__meta {
+  color: #475569;
+  font-size: 13px;
+  margin-top: 5px;
+}
+.eum-org-chart__cta {
+  margin-top: 10px;
+  color: #1d4ed8;
+  font-size: 13px;
+}
+.eum-org-chart__empty {
+  color: #6b7280;
+  padding: 12px;
+}
+.eum-inline-log-table textarea {
+  width: 100%;
+  min-height: 90px;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+@media (max-width: 900px) {
+  .eum-private-profile__grid {
+    grid-template-columns: 1fr;
+  }
+  .eum-org-chart__card {
+    min-width: min(100%, 240px);
+  }
+}
+
+
+.eum-log-card {
+  border: 1px solid #dcdcde;
+  border-radius: 12px;
+  background: #fff;
+  margin-top: 14px;
+  overflow: hidden;
+}
+.eum-log-card summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  background: #f8fafc;
+}
+.eum-log-card__body {
+  padding: 16px;
+}
+.eum-log-card__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 14px 18px;
+  margin-bottom: 16px;
+}
+.eum-log-card__meta p {
+  margin: 0;
+}
+.eum-visual-log-group {
+  margin-top: 18px;
+}
+.eum-visual-log-group h4 {
+  margin: 0 0 8px;
+}
+.eum-visual-log-grid td,
+.eum-visual-log-grid th {
+  vertical-align: top;
+}
+.eum-visual-log-grid input:not([type="checkbox"]),
+.eum-visual-log-grid select,
+.eum-visual-log-grid textarea,
+.eum-log-card__meta input,
+.eum-log-card__meta select {
+  width: 100%;
+}
+.eum-visual-log-grid textarea {
+  min-height: 78px;
+}
+.eum-visual-log-grid select[multiple] {
+  min-height: 92px;
+}
+@media (max-width: 1200px) {
+  .eum-log-card__meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.eum-editor-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #dcdcde;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.eum-editor-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.eum-editor-panel[hidden] {
+  display: none !important;
+}
+.eum-json-log-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 16px;
+}
+.eum-json-log-grid p {
+  margin: 0;
+}
+.eum-json-log-grid textarea {
+  min-height: 240px;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+}
+@media (max-width: 1200px) {
+  .eum-json-log-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Modernized front-end UI */
+.eum-manager-portal,
+.eum-manager-team,
+.eum-directory,
+.eum-private-profile,
+.eum-public-job-board,
+.eum-user-create,
+.eum-manager-jobs,
+.eum-manager-create-user {
+  color: #0f172a;
+}
+.eum-manager-portal a,
+.eum-manager-team a,
+.eum-directory a,
+.eum-private-profile a,
+.eum-public-job-board a,
+.eum-user-create a,
+.eum-manager-jobs a,
+.eum-manager-create-user a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.eum-manager-portal .button,
+.eum-manager-team .button,
+.eum-directory .button,
+.eum-private-profile .button,
+.eum-public-job-board .button,
+.eum-user-create .button,
+.eum-manager-jobs .button,
+.eum-manager-create-user .button,
+.eum-job-path-picker__nonebtn,
+.eum-popup-trigger {
+  border-radius: 999px !important;
+  padding: 8px 14px !important;
+  box-shadow: none !important;
+}
+.eum-directory__hero,
+.eum-public-job-board__expanded,
+.eum-private-profile__section,
+.eum-user-create > div > div,
+.eum-manager-jobs > div > div,
+.eum-manager-portal-panel,
+.eum-my-team,
+.eum-profile-card {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 18px !important;
+  background: #fff !important;
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.05) !important;
+}
+.eum-directory__hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  margin-bottom: 16px;
+}
+.eum-directory__hero h3,
+.eum-private-profile h3,
+.eum-public-job-board__heading {
+  margin: 0 0 6px;
+  font-size: 1.35rem;
+}
+.eum-directory__hero p {
+  margin: 0;
+  color: #475569;
+}
+.eum-directory__filters {
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+.eum-directory__filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 14px;
+}
+.eum-directory__filters label span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #64748b;
+}
+.eum-directory__filters input,
+.eum-directory__filters select,
+.eum-private-profile input:not([type="checkbox"]):not([type="radio"]),
+.eum-private-profile select,
+.eum-private-profile textarea,
+.eum-public-job-board input:not([type="checkbox"]):not([type="radio"]),
+.eum-public-job-board select,
+.eum-public-job-board textarea,
+.eum-user-create input:not([type="checkbox"]):not([type="radio"]),
+.eum-user-create select,
+.eum-user-create textarea,
+.eum-manager-jobs input:not([type="checkbox"]):not([type="radio"]),
+.eum-manager-jobs select,
+.eum-manager-jobs textarea {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 12px !important;
+  border: 1px solid #cbd5e1 !important;
+  padding: 10px 12px !important;
+  background: #fff;
+}
+.eum-private-profile textarea,
+.eum-public-job-board textarea,
+.eum-user-create textarea,
+.eum-manager-jobs textarea {
+  min-height: 110px;
+}
+.eum-directory__filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.eum-directory__panel {
+  margin-top: 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+}
+.eum-directory__panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+.eum-directory__panel-head h4 { margin: 0; }
+.eum-directory__panel-head span { color: #64748b; font-size: 13px; }
+.eum-directory__email-export-body,
+.eum-directory__email-result-body {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+}
+.eum-directory__email-export-body {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+}
+.eum-directory__email-export-body label { display: grid; gap: 6px; font-weight: 600; }
+.eum-directory__email-export-body select { width: 100%; max-width: 520px; }
+.eum-directory__email-export-body .description { grid-column: 1 / -1; margin: 0; }
+.eum-directory__email-result-body textarea { width: 100%; min-height: 76px; font-family: monospace; }
+.eum-directory__email-result-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.eum-directory__email-result-actions [role="status"] { color: #166534; }
+@media (max-width: 640px) {
+  .eum-directory__email-export-body { grid-template-columns: 1fr; }
+  .eum-directory__email-export-body .description { grid-column: auto; }
+}
+.eum-directory__table-wrap { overflow: auto; }
+.eum-directory__table,
+.eum-manager-jobs table,
+.eum-user-create table,
+.eum-private-profile table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.eum-directory__table th,
+.eum-directory__table td,
+.eum-manager-jobs th,
+.eum-manager-jobs td,
+.eum-user-create th,
+.eum-user-create td,
+.eum-private-profile th,
+.eum-private-profile td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+.eum-directory__table thead th,
+.eum-manager-jobs thead th,
+.eum-user-create thead th,
+.eum-private-profile thead th {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #64748b;
+  background: #f8fafc;
+}
+.eum-directory__person { display: flex; align-items: center; gap: 10px; min-width: 180px; }
+.eum-directory__person-details { display: grid; gap: 4px; min-width: 0; }
+.eum-directory__person-details span { color: #64748b; font-size: 13px; }
+.eum-directory__avatar { box-shadow: none; }
+.eum-directory__avatar--small { border: 1px solid rgba(15, 23, 42, .12); }
+.eum-directory__manager { display: inline-flex; align-items: center; gap: 7px; min-width: 120px; }
+.eum-directory__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.eum-directory__empty {
+  padding: 18px 20px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 16px;
+  color: #475569;
+  background: #fff;
+}
+.eum-directory__profile { margin-top: 22px; }
+.eum-private-profile__section,
+.eum-profile-card,
+.eum-user-create > div > div,
+.eum-manager-jobs > div > div {
+  padding: 20px !important;
+}
+.eum-private-profile dl,
+.eum-profile-card dl {
+  row-gap: 12px !important;
+}
+.eum-private-profile dt,
+.eum-profile-card dt {
+  color: #475569;
+}
+.eum-public-job-board__item {
+  padding-bottom: 22px !important;
+  margin-bottom: 22px !important;
+}
+.eum-public-job-board__title {
+  font-size: 1.1rem !important;
+}
+.eum-public-job-board form,
+.eum-manager-jobs form,
+.eum-user-create form,
+.eum-private-profile form {
+  display: grid;
+  gap: 14px;
+}
+.eum-manager-portal .description,
+.eum-directory .description,
+.eum-private-profile .description,
+.eum-public-job-board .description,
+.eum-user-create .description,
+.eum-manager-jobs .description {
+  color: #64748b;
+}
+body:not(.wp-admin) .eum-timeclock .description,
+body:not(.wp-admin) .eum-finance .description,
+body:not(.wp-admin) .eum-schedule .description,
+body:not(.wp-admin) .eum-ar .eum-ar__panel-head span,
+body:not(.wp-admin) .eum-ar .eum-ar__manage-head .description,
+body:not(.wp-admin) .eum-ar form .description {
+  display: none !important;
+}
+.eum-job-path-picker__toolbar {
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
+}
+.eum-job-path-picker__panel {
+  border-color: #e2e8f0 !important;
+  border-radius: 16px !important;
+}
+.eum-manager-portal > div:first-child a {
+  border-radius: 999px !important;
+}
+@media (max-width: 782px) {
+  .eum-directory__hero,
+  .eum-directory__panel-head {
+    display: block;
+  }
+  .eum-directory__actions {
+    min-width: 180px;
+  }
+}
+
+.eum-map-builder {
+  border: 1px solid #dcdcde;
+  border-radius: 14px;
+  padding: 16px;
+  background: #fbfdff;
+  margin-top: 14px;
+}
+.eum-map-builder__head,
+.eum-map-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) 40px;
+  gap: 12px;
+  align-items: start;
+}
+.eum-map-builder__head {
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 8px;
+}
+.eum-map-builder__rows {
+  display: grid;
+  gap: 10px;
+}
+.eum-map-row {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+.eum-map-row .button-link-delete {
+  margin-top: 8px;
+}
+.eum-map-builder__effective {
+  margin-top: 14px;
+}
+.eum-term-bulk-panel {
+  border: 1px solid #dcdcde;
+  border-radius: 14px;
+  padding: 16px;
+  background: #f8fafc;
+  margin-bottom: 16px;
+}
+.eum-term-bulk-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.eum-terms-table td code {
+  font-size: 11px;
+}
+@media (max-width: 1200px) {
+  .eum-term-bulk-grid,
+  .eum-map-builder__head,
+  .eum-map-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.eum-profile-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  overflow: hidden;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  flex: 0 0 auto;
+}
+.eum-profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.eum-profile-avatar.is-generated span {
+  font-size: clamp(1rem, 2vw, 1.8rem);
+}
+.eum-schedule .eum-scheduler-user__name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.eum-schedule .eum-scheduler-user__name > .eum-scheduler-user__avatar,
+.eum-schedule .eum-schedule-summary-person__avatar { flex: 0 0 auto; box-shadow: none; }
+.eum-schedule .eum-scheduler-user__name > span:not(.eum-scheduler-user__avatar):not(.eum-scheduler-user__you) { min-width: 0; overflow-wrap: anywhere; }
+.eum-schedule-summary-person { display: inline-flex; align-items: center; gap: 8px; }
+.eum-profile-card__hero,
+.eum-private-profile__hero,
+.eum-private-profile__current-header,
+.eum-profile-image-editor {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.eum-profile-card__hero,
+.eum-private-profile__hero {
+  margin-bottom: 18px;
+}
+.eum-profile-card__hero-meta,
+.eum-private-profile__hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #64748b;
+}
+.eum-profile-card__hero-meta span,
+.eum-private-profile__hero-meta span {
+  position: relative;
+}
+.eum-profile-card__hero-meta span + span::before,
+.eum-private-profile__hero-meta span + span::before {
+  content: '•';
+  margin-right: 12px;
+  color: #cbd5e1;
+}
+.eum-profile-image-editor__form { flex: 1 1 auto; }
+
+.eum-org-chart--modern {
+  border: 1px solid #dbe4ef;
+  border-radius: 20px;
+  padding: 20px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.06);
+}
+.eum-org-chart__header { margin-bottom: 18px; }
+.eum-org-chart__subhead { margin: 6px 0 0; color: #64748b; }
+.eum-org-chart__shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 24px;
+  align-items: start;
+}
+.eum-org-chart__main { min-width: 0; }
+.eum-org-chart__lane,
+.eum-org-chart__focus-wrap {
+  display: grid;
+  gap: 16px;
+}
+.eum-org-chart__lane--bosses,
+.eum-org-chart__focus-wrap {
+  margin-bottom: 18px;
+}
+
+.eum-org-chart__lane--reports {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+}
+.eum-directory__filter-field--paths {
+  grid-column: 1 / -1;
+}
+.eum-directory__path-filter {
+  border: 1px solid #dbe4ef;
+  border-radius: 16px;
+  background: #fff;
+  padding: 0 14px 14px;
+}
+.eum-directory__path-filter summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 0;
+}
+.eum-directory__path-filter-body {
+  display: grid;
+  gap: 12px;
+}
+.eum-directory__path-filter-list {
+  display: grid;
+  gap: 10px;
+}
+.eum-directory__path-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #dbe4ef;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+.eum-directory__path-pill label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+}
+.eum-directory__path-pill span {
+  overflow-wrap: anywhere;
+}
+.eum-directory__path-pill-remove {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.eum-directory__path-filter-empty {
+  color: #64748b;
+  font-size: 13px;
+}
+.eum-directory__path-filter-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+.eum-directory__job-filter-popup {
+  display: grid;
+  gap: 12px;
+}
+.eum-org-chart__person-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid #d9e4f2;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.06);
+}
+.eum-org-chart__person-card.is-focus {
+  border-color: #2563eb;
+  box-shadow: 0 16px 38px rgba(37, 99, 235, 0.14);
+}
+.eum-org-chart__person-main {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  text-decoration: none;
+  color: inherit;
+}
+.eum-org-chart__avatar { width: 96px; height: 96px; }
+.eum-org-chart__person-copy { min-width: 0; }
+.eum-org-chart__badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.eum-org-chart__badge {
+  background: #eff6ff;
+  color: #2563eb;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 11px;
+  line-height: 1;
+}
+.eum-org-chart__name {
+  display: block;
+  font-size: clamp(1.2rem, 2vw, 1.6rem);
+  line-height: 1.1;
+  margin-bottom: 6px;
+  color: #0f172a;
+}
+.eum-org-chart__meta {
+  display: block;
+  color: #64748b;
+  line-height: 1.25;
+}
+.eum-org-chart__meta--title {
+  color: #334155;
+  font-size: clamp(1rem, 1.8vw, 1.15rem);
+}
+.eum-org-chart__meta--division {
+  font-size: clamp(1rem, 1.7vw, 1.1rem);
+  color: #6b7280;
+  margin-top: 2px;
+}
+.eum-org-chart__meta--counts {
+  margin-top: 10px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.eum-org-chart__info {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  border: 2px solid #9ec1ff;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 26px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+.eum-org-chart__info.is-active,
+.eum-org-chart__info:hover {
+  background: #dbeafe;
+  border-color: #2563eb;
+}
+.eum-org-chart__sidepanel {
+  border: 1px solid #dbe4ef;
+  border-radius: 20px;
+  background: #fff;
+  padding: 18px;
+  min-height: 280px;
+  position: sticky;
+  top: 18px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+.eum-org-sidepanel__hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.eum-org-sidepanel__avatar { width: 84px; height: 84px; }
+.eum-org-sidepanel__hero-copy h4 { margin: 0 0 6px; }
+.eum-org-sidepanel__hero-copy p { margin: 0; color: #64748b; }
+.eum-org-sidepanel__details {
+  display: grid;
+  grid-template-columns: minmax(110px, 140px) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+.eum-org-sidepanel__details dt { font-weight: 700; color: #334155; }
+.eum-org-sidepanel__details dd { margin: 0; color: #0f172a; }
+.eum-org-sidepanel__actions { margin-top: 16px; }
+.eum-org-sidepanel__hint { margin-top: 14px; color: #64748b; }
+.eum-org-chart__empty {
+  padding: 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 18px;
+  background: #fff;
+  color: #64748b;
+}
+
+.eum-job-board > div > div,
+.eum-job-board .eum-job-board-card,
+.eum-job-board .eum-candidate-editor {
+  border-radius: 18px !important;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.05);
+}
+.eum-job-board table.widefat {
+  border-radius: 14px;
+  overflow: hidden;
+  border-color: #e2e8f0;
+}
+.eum-job-board table.widefat thead th {
+  background: #f8fafc;
+  border-bottom-color: #e2e8f0;
+}
+.eum-job-board .button,
+.eum-job-board button,
+.eum-private-profile .button,
+.eum-org-sidepanel .button {
+  border-radius: 12px;
+}
+.eum-job-board textarea,
+.eum-job-board input[type="text"],
+.eum-job-board input[type="email"],
+.eum-job-board input[type="url"],
+.eum-job-board input[type="datetime-local"],
+.eum-job-board select,
+.eum-private-profile textarea,
+.eum-private-profile input[type="text"],
+.eum-private-profile input[type="email"],
+.eum-private-profile input[type="url"],
+.eum-private-profile input[type="datetime-local"],
+.eum-private-profile input[type="color"],
+.eum-private-profile select {
+  border-radius: 12px;
+  border-color: #dbe4ef;
+  box-shadow: none;
+}
+@media (max-width: 1100px) {
+  .eum-org-chart__shell { grid-template-columns: 1fr; }
+  .eum-org-chart__sidepanel { position: static; }
+}
+@media (max-width: 782px) {
+  .eum-profile-card__hero,
+  .eum-private-profile__hero,
+  .eum-private-profile__current-header,
+  .eum-profile-image-editor,
+  .eum-org-chart__person-main,
+  .eum-org-sidepanel__hero {
+    align-items: flex-start;
+  }
+  .eum-org-chart__lane--reports {
+    grid-template-columns: 1fr;
+  }
+  .eum-org-chart__person-card {
+    grid-template-columns: 1fr;
+  }
+  .eum-org-chart__info {
+    justify-self: end;
+  }
+}
+
+.eum-events-shell {
+  display: grid;
+  gap: 18px;
+}
+.eum-events-card,
+.eum-event-card {
+  border: 1px solid #dcdcde;
+  border-radius: 16px;
+  background: #fff;
+  padding: 18px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+.eum-events-card--sub {
+  margin-top: 16px;
+  background: #f8fafc;
+}
+.eum-events-card__header,
+.eum-event-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.eum-events-card__header h2,
+.eum-event-card__head h3 {
+  margin: 0 0 6px;
+}
+.eum-event-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+.eum-field label {
+  display: block;
+  margin-bottom: 8px;
+}
+.eum-field input[type="text"],
+.eum-field input[type="url"],
+.eum-field input[type="number"],
+.eum-field input[type="datetime-local"],
+.eum-field input[type="time"],
+.eum-field textarea,
+.eum-field select {
+  width: 100%;
+  max-width: 100%;
+}
+.eum-select-multi {
+  min-height: 180px;
+}
+.eum-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.eum-event-card + .eum-event-card {
+  margin-top: 14px;
+}
+.eum-event-card__meta {
+  margin: 0;
+  color: #475569;
+}
+.eum-event-card__description {
+  margin-top: 12px;
+}
+.eum-events-shell__availability {
+  margin-top: 0;
+}
+.eum-availability-table input[type="time"] {
+  width: 100%;
+}
+.eum-availability-portal {
+  max-width: 1100px;
+  display: grid;
+  gap: 18px;
+}
+.eum-availability-notice {
+  border: 1px solid #bbf7d0;
+  border-left: 4px solid #16a34a;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #14532d;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+.eum-availability-notice.is-error {
+  border-color: #fecdd3;
+  border-left-color: #e11d48;
+  background: #fff1f2;
+  color: #9f1239;
+}
+.eum-availability-summary,
+.eum-availability-panel {
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+.eum-availability-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+}
+.eum-availability-summary h2,
+.eum-availability-panel h3 {
+  margin: 0;
+  color: #111827;
+}
+.eum-availability-summary__body {
+  color: #334155;
+  line-height: 1.6;
+}
+.eum-availability-timezone-note {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.eum-availability-timezone-form {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  grid-column: 1 / -1;
+  max-width: 520px;
+}
+.eum-availability-timezone-form label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+}
+.eum-availability-timezone-form span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+.eum-availability-timezone-form select {
+  width: 100%;
+  max-width: 100%;
+}
+.eum-availability-panel {
+  padding: 18px;
+}
+.eum-availability-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+.eum-availability-panel__header p {
+  max-width: 520px;
+  margin: 0;
+  color: #64748b;
+}
+.eum-availability-eyebrow {
+  margin: 0 0 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.eum-availability-form {
+  display: grid;
+  gap: 16px;
+}
+.eum-availability-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.eum-availability-field,
+.eum-availability-day__block label {
+  display: grid;
+  gap: 6px;
+}
+.eum-availability-field > span,
+.eum-availability-day__block span,
+.eum-availability-scope legend {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+.eum-availability-field input,
+.eum-availability-field select,
+.eum-availability-field textarea,
+.eum-availability-day input[type="time"] {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 6px;
+}
+.eum-availability-field small {
+  color: #64748b;
+  line-height: 1.35;
+}
+.eum-availability-scope {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 8px;
+}
+.eum-availability-scope label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #1f2937;
+  font-weight: 700;
+}
+.eum-availability-days {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.eum-availability-day {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-height: 164px;
+  padding: 12px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.eum-availability-day.is-enabled {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+.eum-availability-day__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-weight: 800;
+  color: #111827;
+}
+.eum-availability-day__blocks {
+  display: grid;
+  gap: 10px;
+}
+.eum-availability-day__block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 8px;
+  background: #fff;
+}
+.eum-availability-remove-block {
+  min-height: 30px;
+  white-space: nowrap;
+}
+.eum-availability-day__tools {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.eum-availability-day__tools label {
+  display: grid;
+  gap: 4px;
+}
+.eum-availability-day__tools span {
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+.eum-availability-day__tools select {
+  width: 100%;
+  max-width: 100%;
+}
+.eum-availability-day:not(.is-enabled) .eum-availability-day__blocks {
+  opacity: 0.55;
+}
+.eum-availability-field--notes textarea {
+  min-height: 92px;
+}
+.eum-availability-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.eum-availability-panel table {
+  margin-top: 4px;
+}
+@media (max-width: 900px) {
+  .eum-event-grid {
+    grid-template-columns: 1fr;
+  }
+  .eum-events-card__header,
+  .eum-event-card__head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .eum-availability-summary,
+  .eum-availability-controls {
+    grid-template-columns: 1fr;
+  }
+  .eum-availability-days {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .eum-availability-timezone-form {
+    align-items: stretch;
+  }
+  .eum-availability-panel__header {
+    flex-direction: column;
+  }
+}
+@media (max-width: 560px) {
+  .eum-availability-days {
+    grid-template-columns: 1fr;
+  }
+  .eum-availability-day__block,
+  .eum-availability-day__tools {
+    grid-template-columns: 1fr;
+  }
+}
+.eum-events-shell--manager .eum-events-card + .eum-events-card,
+.eum-events-shell--user .eum-events-card + .eum-events-card {
+  margin-top: 18px;
+}
+.eum-events-card__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.eum-event-rsvp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.eum-event-rsvp-form {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+.eum-event-rsvp-summary {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.eum-event-delete-form {
+  margin-top: 10px;
+}
+.eum-event-rsvp-table-wrap {
+  margin-top: 14px;
+}
+.eum-event-rsvp-table th,
+.eum-event-rsvp-table td {
+  vertical-align: middle;
+}
+.eum-event-rsvp-reset-form {
+  margin: 0;
+}
+.eum-event-chat__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.eum-event-chat__header h4 {
+  margin: 0 0 4px;
+}
+.eum-event-chat__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  background: #e2e8f0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.eum-event-chat__messages {
+  display: grid;
+  gap: 12px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.eum-event-chat__message {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px 14px;
+}
+.eum-event-chat__message-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.eum-event-chat__timestamp {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+.eum-event-chat__bubble {
+  line-height: 1.55;
+  color: #0f172a;
+}
+.eum-event-chat__delete-form {
+  margin: 0;
+}
+.eum-event-chat-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+.eum-event-chat-form textarea {
+  min-height: 96px;
+}
+.eum-event-chat__composer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.eum-event-chat__empty {
+  border: 1px dashed rgba(15, 23, 42, 0.12);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(248, 250, 252, 0.7);
+}
+@media (max-width: 900px) {
+  .eum-event-chat__header,
+  .eum-event-chat__composer,
+  .eum-event-chat__message-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+@media (max-width: 900px) {
+  .eum-event-rsvp-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.eum-visual-bulk__intro {
+  margin: 10px 0 18px;
+}
+.eum-visual-bulk__toolbar,
+.eum-visual-bulk__bulk-bar {
+  margin: 14px 0;
+}
+.eum-visual-bulk__toolbar .tablenav,
+.eum-visual-bulk__bulk-bar.tablenav {
+  float: none;
+  height: auto;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  background: #fff;
+}
+.eum-visual-bulk__toolbar .tablenav::after,
+.eum-visual-bulk__bulk-bar.tablenav::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+.eum-visual-bulk__filters-left,
+.eum-visual-bulk__bulk-controls,
+.eum-visual-bulk__save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.eum-visual-bulk__toolbar .search-box {
+  margin: 0;
+  float: right;
+}
+.eum-visual-bulk__toolbar input[type="search"] {
+  min-width: 220px;
+}
+.eum-visual-bulk__result-meta {
+  margin: 8px 0 16px;
+  color: #50575e;
+}
+.eum-visual-bulk__select-all-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+.eum-visual-bulk__redirect-controls {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #dcdcde;
+}
+.eum-visual-bulk__redirect-controls input[type="text"] {
+  width: min(420px, 100%);
+}
+.eum-bulk-value input,
+.eum-bulk-value select,
+.eum-bulk-value textarea {
+  min-width: 180px;
+}
+.eum-visual-bulk__clear-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.eum-visual-bulk__table {
+  border: 1px solid #dcdcde;
+}
+.eum-visual-bulk__table td,
+.eum-visual-bulk__table th {
+  vertical-align: top;
+}
+.eum-visual-bulk__table .check-column {
+  width: 2.6em;
+}
+.eum-visual-bulk__person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.eum-visual-bulk__person .avatar {
+  border-radius: 50%;
+}
+.eum-visual-bulk__summary-row.is-open {
+  background: #f6f7f7;
+}
+.eum-visual-bulk__badge {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 6px 6px 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #dcdcde;
+  color: #1d2327;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.eum-visual-bulk__badge.is-success {
+  background: #dff4e4;
+  color: #0a5c2a;
+}
+.eum-visual-bulk__badge.is-danger {
+  background: #fbeaea;
+  color: #8a2424;
+}
+.eum-visual-bulk__badge.is-warning {
+  background: #fff1d6;
+  color: #8a5a00;
+}
+.eum-visual-bulk__badge.is-muted {
+  background: #edeff0;
+  color: #50575e;
+}
+.eum-visual-bulk__edit-row > td {
+  padding: 0 !important;
+}
+.eum-visual-bulk__editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  background: #f6f7f7;
+}
+.eum-visual-bulk__editor-section {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #dcdcde;
+  border-radius: 8px;
+  background: #fff;
+}
+.eum-visual-bulk__editor-section h4 {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+.eum-visual-bulk__field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.eum-visual-bulk__field > span {
+  font-weight: 600;
+}
+.eum-visual-bulk__field input[type="text"],
+.eum-visual-bulk__field input[type="email"],
+.eum-visual-bulk__field input[type="url"],
+.eum-visual-bulk__field input[type="date"],
+.eum-visual-bulk__field input[type="number"],
+.eum-visual-bulk__field select,
+.eum-visual-bulk__field textarea {
+  width: 100%;
+}
+.eum-visual-bulk__field textarea {
+  min-height: 80px;
+}
+.eum-visual-bulk__field:last-child {
+  margin-bottom: 0;
+}
+.eum-visual-bulk__effective-note {
+  margin: -4px 0 12px;
+}
+.eum-visual-bulk__bool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 1200px) {
+  .eum-visual-bulk__toolbar .search-box,
+  .eum-visual-bulk__toolbar .tablenav .alignleft,
+  .eum-visual-bulk__bulk-bar .alignleft,
+  .eum-visual-bulk__bulk-bar .alignright {
+    float: none;
+  }
+  .eum-visual-bulk__toolbar .search-box {
+    margin-top: 8px;
+  }
+}
+@media (max-width: 900px) {
+  .eum-visual-bulk__editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .eum-visual-bulk__filters-left,
+  .eum-visual-bulk__bulk-controls,
+  .eum-visual-bulk__save-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .eum-bulk-value input,
+  .eum-bulk-value select,
+  .eum-bulk-value textarea,
+  .eum-visual-bulk__toolbar input[type="search"] {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+.eum-directory__bulk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.eum-team-bulk-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100001;
+}
+.eum-team-bulk-modal[hidden] {
+  display: none !important;
+}
+.eum-team-bulk-modal.is-open {
+  display: block !important;
+}
+.eum-team-bulk-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.58);
+}
+.eum-team-bulk-modal__panel {
+  position: relative;
+  width: min(1080px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: 16px auto;
+  overflow: auto;
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.25);
+}
+.eum-team-bulk-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 2;
+}
+.eum-team-bulk-modal__close {
+  border: 0;
+  background: transparent;
+  font-size: 30px;
+  line-height: 1;
+  cursor: pointer;
+}
+.eum-team-bulk-modal__body {
+  padding: 20px 22px 24px;
+  display: grid;
+  gap: 16px;
+}
+.eum-team-bulk-modal__selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+.eum-team-bulk-modal__flags {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.eum-team-bulk-modal__section {
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 16px;
+  background: #f8fafc;
+}
+.eum-team-bulk-modal__section h4 {
+  margin: 0 0 12px;
+}
+.eum-team-bulk-modal__grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.eum-team-bulk-modal__actions {
+  margin-top: 4px;
+}
+@media (max-width: 720px) {
+  .eum-team-bulk-modal__selected {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.eum-team-bulk-modal__field {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.eum-team-bulk-modal__field-label {
+  display: block;
+  font-weight: 600;
+}
+
+.eum-saved-filters {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid #d7dde6;
+  border-radius: 12px;
+  background: #fff;
+}
+.eum-saved-filters__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #455469;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.eum-saved-filters__body {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.eum-saved-filters__body select {
+  min-width: 220px;
+  max-width: 320px;
+}
+
+/* Mobile front-end safety net */
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) {
+  box-sizing: border-box;
+  width: min(100%, 1280px);
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) *,
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) *::before,
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) *::after {
+  box-sizing: border-box;
+}
+
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) :where(img, video, iframe, canvas, svg) {
+  max-width: 100%;
+  height: auto;
+}
+
+body:not(.wp-admin) :where(
+  .eum-directory__table-wrap,
+  .eum-finance__table-wrap,
+  .eum-event-rsvp-table-wrap,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-schedule,
+  .eum-visual-bulk__toolbar,
+  .eum-visual-bulk__bulk-bar,
+  .eum-dtc__panel,
+  .eum-ar__panel,
+  .eum-ar__manage-card,
+  .eum-events-card,
+  .eum-availability-panel,
+  .eum-private-profile__section,
+  .eum-profile-card,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-job-board,
+  .eum-public-job-board
+) {
+  max-width: 100%;
+}
+
+body:not(.wp-admin) :where(
+  .eum-directory__table-wrap,
+  .eum-finance__table-wrap,
+  .eum-event-rsvp-table-wrap,
+  .eum-ticket-portal table,
+  .eum-timeclock table,
+  .eum-timeclock-team table,
+  .eum-schedule table,
+  .eum-private-profile table,
+  .eum-user-create table,
+  .eum-user-creation table,
+  .eum-job-board table,
+  .eum-public-job-board table,
+  .eum-manager-jobs table,
+  .eum-change-dashboard table,
+  .eum-dtc table,
+  .eum-ar table,
+  .eum-finance table
+) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+body:not(.wp-admin) :where(
+  .eum-ticket-portal table,
+  .eum-timeclock table,
+  .eum-timeclock-team table,
+  .eum-schedule table,
+  .eum-private-profile table,
+  .eum-user-create table,
+  .eum-user-creation table,
+  .eum-job-board table,
+  .eum-public-job-board table,
+  .eum-manager-jobs table,
+  .eum-change-dashboard table,
+  .eum-dtc table,
+  .eum-ar table,
+  .eum-finance table
+) {
+  min-width: min(720px, 100%);
+}
+
+body:not(.wp-admin) :where(
+  .eum-manager-portal,
+  .eum-manager-team,
+  .eum-directory,
+  .eum-private-profile,
+  .eum-public-job-board,
+  .eum-job-board,
+  .eum-user-create,
+  .eum-user-creation,
+  .eum-manager-jobs,
+  .eum-manager-create-user,
+  .eum-change-dashboard,
+  .eum-ticket-portal,
+  .eum-timeclock,
+  .eum-timeclock-team,
+  .eum-leave-portal,
+  .eum-availability-portal,
+  .eum-terminated-portal,
+  .eum-employee-lookup,
+  .eum-anniversaries,
+  .eum-events-shell,
+  .eum-dtc,
+  .eum-ar,
+  .eum-finance,
+  .eum-schedule
+) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea) {
+  max-width: 100%;
+}
+
+body:not(.wp-admin) :where(
+  .eum-directory__actions,
+  .eum-directory__filter-actions,
+  .eum-events-card__actions,
+  .eum-ar__actions,
+  .eum-ar__toolbar,
+  .eum-ar__toolbar-form,
+  .eum-ar__inline-forms,
+  .eum-dtc__toolbar,
+  .eum-finance__actions,
+  .eum-schedule__actions,
+  .eum-personnel-files li,
+  .eum-event-chat__composer,
+  .eum-availability-actions,
+  .eum-visual-bulk__filters-left,
+  .eum-visual-bulk__bulk-controls,
+  .eum-visual-bulk__save-actions
+) {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 782px) {
+  body:not(.wp-admin) {
+    overflow-x: hidden;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-manager-portal,
+    .eum-manager-team,
+    .eum-directory,
+    .eum-private-profile,
+    .eum-public-job-board,
+    .eum-job-board,
+    .eum-user-create,
+    .eum-user-creation,
+    .eum-manager-jobs,
+    .eum-manager-create-user,
+    .eum-change-dashboard,
+    .eum-ticket-portal,
+    .eum-timeclock,
+    .eum-timeclock-team,
+    .eum-leave-portal,
+    .eum-availability-portal,
+    .eum-terminated-portal,
+    .eum-employee-lookup,
+    .eum-anniversaries,
+    .eum-events-shell,
+    .eum-dtc,
+    .eum-ar,
+    .eum-finance,
+    .eum-schedule
+  ) {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding-left: clamp(12px, 4vw, 18px);
+    padding-right: clamp(12px, 4vw, 18px);
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-directory__hero,
+    .eum-directory__panel-head,
+    .eum-events-card__header,
+    .eum-event-card__head,
+    .eum-event-chat__header,
+    .eum-availability-panel__header,
+    .eum-profile-card__hero,
+    .eum-private-profile__hero,
+    .eum-private-profile__current-header,
+    .eum-profile-image-editor,
+    .eum-org-chart__person-main,
+    .eum-org-sidepanel__hero,
+    .eum-ar__hero,
+    .eum-ar__workspace-head,
+    .eum-ar__artist-card-head,
+    .eum-ar__manage-head,
+    .eum-dtc__hero,
+    .eum-dtc__panel-head,
+    .eum-finance__hero,
+    .eum-finance__panel-head,
+    .eum-ticket-portal > div:first-child
+  ) {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-private-profile__grid,
+    .eum-directory__filter-grid,
+    .eum-json-log-grid,
+    .eum-term-bulk-grid,
+    .eum-map-builder__head,
+    .eum-map-row,
+    .eum-org-chart__shell,
+    .eum-org-chart__lane--reports,
+    .eum-event-grid,
+    .eum-event-rsvp-grid,
+    .eum-availability-summary,
+    .eum-availability-controls,
+    .eum-availability-days,
+    .eum-availability-day__block,
+    .eum-availability-day__tools,
+    .eum-visual-bulk__editor-grid,
+    .eum-ar__layout,
+    .eum-ar__split,
+    .eum-ar__two,
+    .eum-ar__cards,
+    .eum-ar__artist-grid,
+    .eum-ar__form-grid,
+    .eum-ar__manage-grid,
+    .eum-ar__meta-grid,
+    .eum-ar__detail-grid,
+    .eum-dtc__grid,
+    .eum-dtc__form-grid,
+    .eum-finance__grid,
+    .eum-finance__field-grid,
+    .eum-finance__picker-grid
+  ) {
+    grid-template-columns: 1fr !important;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-private-profile__section,
+    .eum-profile-card,
+    .eum-directory__hero,
+    .eum-directory__filters,
+    .eum-directory__panel,
+    .eum-events-card,
+    .eum-event-card,
+    .eum-availability-panel,
+    .eum-availability-summary,
+    .eum-org-chart--modern,
+    .eum-org-chart__person-card,
+    .eum-org-chart__sidepanel,
+    .eum-ar__panel,
+    .eum-ar__manage-card,
+    .eum-dtc__panel,
+    .eum-finance__panel,
+    .eum-ticket-portal [style*="background:#fff"],
+    .eum-change-dashboard__card
+  ) {
+    border-radius: 14px !important;
+    padding: clamp(14px, 4vw, 18px) !important;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-directory__hero h1,
+    .eum-directory__hero h2,
+    .eum-directory__hero h3,
+    .eum-private-profile h1,
+    .eum-private-profile h2,
+    .eum-private-profile h3,
+    .eum-ticket-portal h1,
+    .eum-ticket-portal h2,
+    .eum-timeclock h1,
+    .eum-timeclock h2,
+    .eum-events-shell h1,
+    .eum-events-shell h2,
+    .eum-ar h1,
+    .eum-ar h2,
+    .eum-dtc h1,
+    .eum-dtc h2,
+    .eum-finance h1,
+    .eum-finance h2,
+    .eum-schedule h1,
+    .eum-schedule h2
+  ) {
+    font-size: clamp(1.35rem, 7vw, 2rem) !important;
+    line-height: 1.12 !important;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-manager-portal,
+    .eum-manager-team,
+    .eum-directory,
+    .eum-private-profile,
+    .eum-public-job-board,
+    .eum-job-board,
+    .eum-user-create,
+    .eum-user-creation,
+    .eum-manager-jobs,
+    .eum-manager-create-user,
+    .eum-change-dashboard,
+    .eum-ticket-portal,
+    .eum-timeclock,
+    .eum-timeclock-team,
+    .eum-leave-portal,
+    .eum-availability-portal,
+    .eum-terminated-portal,
+    .eum-employee-lookup,
+    .eum-anniversaries,
+    .eum-events-shell,
+    .eum-dtc,
+    .eum-ar,
+    .eum-finance,
+    .eum-schedule
+  ) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select, textarea, button, .button) {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  body:not(.wp-admin) :where(
+    .button,
+    button,
+    input[type="submit"],
+    input[type="button"]
+  ) {
+    min-height: 42px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-directory__actions,
+    .eum-directory__filter-actions,
+    .eum-events-card__actions,
+    .eum-ar__actions,
+    .eum-ar__toolbar,
+    .eum-ar__toolbar-form,
+    .eum-ar__inline-forms,
+    .eum-dtc__toolbar,
+    .eum-finance__actions,
+    .eum-schedule__actions,
+    .eum-personnel-files li,
+    .eum-event-chat__composer,
+    .eum-availability-actions,
+    .eum-visual-bulk__filters-left,
+    .eum-visual-bulk__bulk-controls,
+    .eum-visual-bulk__save-actions,
+    .eum-timeclock-entry-form
+  ) {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  body:not(.wp-admin) :where(.eum-personnel-files li) > * {
+    width: 100%;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-popup__panel,
+    .eum-team-bulk-modal__panel
+  ) {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    margin: 10px auto;
+    border-radius: 14px;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-popup__header,
+    .eum-team-bulk-modal__header,
+    .eum-popup__body,
+    .eum-team-bulk-modal__body
+  ) {
+    padding: 14px;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-org-chart__avatar,
+    .eum-org-sidepanel__avatar
+  ) {
+    width: 72px;
+    height: 72px;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-org-sidepanel__details,
+    .eum-private-profile dl,
+    .eum-profile-card dl
+  ) {
+    grid-template-columns: 1fr !important;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-ar__subtabs,
+    .eum-dtc__tabs
+  ) {
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  body:not(.wp-admin) :where(
+    .eum-ar__subtabs > *,
+    .eum-dtc__tabs > *
+  ) {
+    flex: 0 0 auto;
+    width: auto;
+  }
+}
