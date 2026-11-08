@@ -25,6 +25,8 @@ define('EUM_PLUGIN_FILE', __FILE__);
 define('EUM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('EUM_PLUGIN_URL', plugin_dir_url(__FILE__));
 
+require_once EUM_PLUGIN_DIR . 'includes/update-checker-bootstrap.php';
+
 if (!function_exists('eum_log_message')) {
   function eum_log_message(string $message): void {
     $message = trim($message);

@@ -208,8 +208,12 @@ class EUM_Job_Titles {
     $redirect_args = ['page' => 'eum-job-titles'];
 
     if ($action === 'delete' && $post_id > 0) {
+      $affected_paths = self::allowed_job_paths($post_id);
       wp_delete_post($post_id, true);
       self::invalidate_cache();
+      if (class_exists('EUM_Public_Meta')) {
+        foreach ($affected_paths as $term_id) EUM_Public_Meta::sync_users_for_job_path((int)$term_id);
+      }
       wp_safe_redirect(add_query_arg(array_merge($redirect_args, ['updated' => 'deleted']), admin_url('admin.php')));
       exit;
     }
@@ -239,6 +243,7 @@ class EUM_Job_Titles {
       update_post_meta($post_id, self::META_ALLOWED_JOB_PATHS, $allowed_paths);
       update_post_meta($post_id, self::META_DEFAULT_GROUPS, $groups);
       update_post_meta($post_id, self::META_DEFAULT_PROJECTS, $projects);
+      if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::save_job_title_fields($post_id, $_POST);
       self::invalidate_cache();
       if (class_exists('EUM_Taxonomies')) {
         foreach ($allowed_paths as $term_id) {
@@ -294,6 +299,7 @@ class EUM_Job_Titles {
     wp_nonce_field('eum_job_titles_save');
     echo '<input type="hidden" name="job_title_id" value="' . (int)$edit_id . '">';
     echo '<p><label><strong>Job Title Name</strong></label><br><input type="text" name="job_title_name" value="' . esc_attr($name) . '" class="regular-text" style="width:100%;max-width:420px;" required></p>';
+    if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::render_job_title_fields($edit_id);
     echo '<p><label><strong>Allowed Job Paths</strong></label><br>';
     echo class_exists('EUM_Profiles') ? EUM_Profiles::render_job_path_directory_checkboxes('allowed_job_paths', $allowed_paths, get_current_user_id(), ['enforce_manageable_job_paths' => false]) : $this->render_checkboxes('allowed_job_paths', $this->all_job_paths_for_form(), $allowed_paths, 'No Job Paths exist yet.');
     echo '<span class="description">These paths can use this title inside the Job Path selector.</span></p>';

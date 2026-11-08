@@ -376,6 +376,10 @@ class EUM_Taxonomies {
       ['key' => 'user_email', 'label' => 'Work Email'],
       ['key' => 'eum_manager_user_id', 'label' => 'Manager User ID'],
       ['key' => 'job_company', 'label' => 'Company Division'],
+      ['key' => 'public_nickname', 'label' => 'Public Nickname'],
+      ['key' => 'public_jobtitle', 'label' => 'Public Job Title'],
+      ['key' => 'public_division', 'label' => 'Public Division'],
+      ['key' => 'public_labels', 'label' => 'Public Labels (comma separated)'],
     ];
 
     $reserved = array_fill_keys(self::mapping_keys_reserved_for_explicit_selection(), true);
@@ -492,6 +496,7 @@ class EUM_Taxonomies {
           $syncer->sync_user($user_id);
         }
       }
+      if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::sync_user($user_id);
     } catch (\Throwable $e) {
       self::log_runtime_issue('sync_user_classification_effects', $e);
     }
@@ -506,6 +511,7 @@ class EUM_Taxonomies {
     foreach ($mapping as $key => $value) {
       $key = self::normalize_mapping_key((string)$key);
       if ($key === '') continue;
+      if (class_exists('EUM_Public_Meta') && EUM_Public_Meta::is_public_meta_key($key)) continue;
       $value = is_scalar($value) ? (string)$value : wp_json_encode($value);
       switch ($key) {
         case 'first_name':

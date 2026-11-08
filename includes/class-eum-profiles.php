@@ -106,12 +106,13 @@ class EUM_Profiles {
         if ($key !== '' && $key !== 'employee_id') $custom_ids[] = 'custom:' . $key;
       }
     }
+    $public_meta_ids = class_exists('EUM_Public_Meta') ? array_keys(EUM_Public_Meta::profile_field_definitions()) : [];
 
     return [
       'public_profiles_enabled' => 1,
       'public_fields' => ['core:display_name', 'tax:eum_location', 'core:eum_manager_user_id', 'tax:eum_job_path'],
       'self_edit_fields' => array_values(array_unique(array_merge(['core:first_name', 'core:last_name', 'core:display_name'], $custom_ids))),
-      'manager_edit_fields' => array_values(array_unique(array_merge(['core:first_name', 'core:last_name', 'core:display_name', 'core:eum_manager_user_id', 'tax:eum_location', 'tax:eum_job_path'], $custom_ids))),
+      'manager_edit_fields' => array_values(array_unique(array_merge(['core:first_name', 'core:last_name', 'core:display_name', 'core:eum_manager_user_id', 'tax:eum_location', 'tax:eum_job_path'], $custom_ids, $public_meta_ids))),
       'manager_edit_fields_without_approval' => [],
       'logging_enabled' => 1,
       'force_next_sunday' => 0,
@@ -255,6 +256,8 @@ class EUM_Profiles {
     if (!isset($fields['custom:worker_type'])) {
       $fields['custom:worker_type'] = ['label' => 'Worker Type', 'group' => 'Custom Fields', 'type' => 'worker_type_select', 'custom_key' => 'worker_type'];
     }
+
+    if (class_exists('EUM_Public_Meta')) $fields = array_merge($fields, EUM_Public_Meta::profile_field_definitions());
 
     return $fields;
   }
@@ -634,6 +637,10 @@ class EUM_Profiles {
     if (!isset($catalog[$field_id])) return null;
     $def = $catalog[$field_id];
 
+    if (($def['type'] ?? '') === 'public_meta_override' && class_exists('EUM_Public_Meta')) {
+      return EUM_Public_Meta::profile_override_state($user_id, (string)($def['meta_key'] ?? ''));
+    }
+
     if (str_starts_with($field_id, 'core:')) {
       $key = substr($field_id, 5);
       $u = get_user_by('id', $user_id);
@@ -684,6 +691,11 @@ class EUM_Profiles {
     if (!isset($catalog[$field_id])) return '';
     $def = $catalog[$field_id];
     $raw = self::get_field_raw_value($user_id, $field_id);
+
+    if (($def['type'] ?? '') === 'public_meta_override') {
+      $key = (string)($def['meta_key'] ?? '');
+      return class_exists('EUM_Public_Meta') ? (string)(EUM_Public_Meta::values_for_user($user_id)[$key] ?? '') : '';
+    }
 
     if ($field_id === 'core:eum_manager_user_id') {
       return $raw ? self::manager_user_name((int)$raw) : '';
@@ -2179,7 +2191,13 @@ EUMJS;
     echo '<p style="margin-bottom:14px;">';
     echo '<label style="display:block;font-weight:600;margin-bottom:4px;">' . esc_html($label) . '</label>';
 
-    if ($type === 'job_title_select') {
+    if ($type === 'public_meta_override') {
+      $state = is_array($raw) ? $raw : ['enabled' => false, 'value' => ''];
+      echo '<label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><input type="checkbox" name="' . esc_attr($name) . '[enabled]" value="1" ' . checked(!empty($state['enabled']), true, false) . '> Override inherited value</label>';
+      echo '<input type="text" name="' . esc_attr($name) . '[value]" value="' . esc_attr((string)($state['value'] ?? '')) . '" style="min-width:320px;max-width:520px;width:100%;">';
+      if ((string)($def['meta_key'] ?? '') === 'public_labels') echo '<br><span class="description">Overrides Job Path, Job Title, and activation-status values for this user. Enter labels separated by commas; enabled blank clears inherited labels.</span>';
+      else echo '<br><span class="description">Overrides Job Path, Job Title, and activation-status values for this user. An enabled blank value clears inherited metadata.</span>';
+    } elseif ($type === 'job_title_select') {
       $job_term_id = (int)self::get_field_raw_value($target_user_id, 'tax:eum_job_path');
       echo self::render_job_title_select_html($name, (string)$raw, $job_term_id, 'Selected in Job Path', false);
       echo '<br><span class="description">Job Title is selected from the Job Path field above. Titles are managed centrally in Enterprise Users → Job Titles.</span>';
@@ -2794,6 +2812,15 @@ EUMJS;
   private function normalize_posted_field(string $field_id, array $def, $posted) {
     $type = (string)($def['type'] ?? 'text');
 
+    if ($type === 'public_meta_override' && class_exists('EUM_Public_Meta')) {
+      $posted = is_array($posted) ? $posted : [];
+      $key = (string)($def['meta_key'] ?? '');
+      return [
+        'enabled' => !empty($posted['enabled']),
+        'value' => EUM_Public_Meta::sanitize_value($key, $posted['value'] ?? ''),
+      ];
+    }
+
     if ($type === 'taxonomy_multi') {
       $vals = is_array($posted) ? $posted : [];
       $vals = array_values(array_filter(array_map('intval', $vals), fn($v) => $v > 0));
@@ -3012,6 +3039,11 @@ EUMJS;
 
       if (!isset($catalog[$field_id])) continue;
       $def = $catalog[$field_id];
+
+      if (($def['type'] ?? '') === 'public_meta_override' && class_exists('EUM_Public_Meta')) {
+        EUM_Public_Meta::save_profile_override($target_user_id, (string)($def['meta_key'] ?? ''), $value);
+        continue;
+      }
 
       if (str_starts_with($field_id, 'core:')) {
         $key = substr($field_id, 5);
@@ -3419,6 +3451,12 @@ EUMJS;
     $catalog = self::field_catalog();
     if (!isset($catalog[$field_id])) return is_scalar($raw) ? (string)$raw : wp_json_encode($raw);
     $def = $catalog[$field_id];
+    if (($def['type'] ?? '') === 'public_meta_override') {
+      if (!is_array($raw)) return 'Inherit';
+      if (empty($raw['enabled'])) return 'Inherit';
+      $value = (string)($raw['value'] ?? '');
+      return $value !== '' ? $value : '(cleared inherited value)';
+    }
     if ($field_id === 'core:eum_manager_user_id') {
       if (self::is_log_custom_text_value($raw)) return self::display_scalar_log_value($raw);
       return $raw ? (self::manager_user_name((int)$raw) ?: self::display_scalar_log_value($raw)) : '—';

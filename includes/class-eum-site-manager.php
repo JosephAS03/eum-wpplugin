@@ -523,6 +523,7 @@ class EUM_Site_Manager {
       'eum_it_access', 'eum_hr_access', 'eum_hr_it_access',
       'eum_terminated', 'eum_rehirable', 'eum_terminated_at',
       '_eum_profile_image_url', '_eum_profile_image_id', '_eum_profile_image_color',
+      'public_nickname', 'public_jobtitle', 'public_division', 'public_labels',
     ];
     $is_role_key = preg_match('/(?:^|_)capabilities$/', $meta_key) === 1 || preg_match('/(?:^|_)user_level$/', $meta_key) === 1;
     $syncable_keys = apply_filters('eum_site_manager_syncable_user_meta_keys', $syncable_keys, (int)$user_id);
@@ -994,6 +995,7 @@ class EUM_Site_Manager {
       'account_status' => $is_terminated && !$is_auto_disable_exempt ? 'inactive' : 'active',
       'profile_image_url' => class_exists('EUM_Profiles') ? EUM_Profiles::profile_avatar_url($user_id) : '',
       'profile_data' => self::public_profile_snapshot($user_id),
+      'public_meta' => class_exists('EUM_Public_Meta') ? EUM_Public_Meta::values_for_user($user_id) : [],
       'site_role' => self::site_role_for_user($user_id, $site),
     ];
   }

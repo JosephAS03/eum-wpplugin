@@ -452,15 +452,33 @@ class EUM_Term_Manager {
       $updated = wp_update_term($term_id, $tax, $args);
       if (is_wp_error($updated)) $this->redirect_with_msg($tax, $updated->get_error_message(), 'error');
       $this->save_term_meta($tax, $term_id);
-      $this->redirect_with_msg($tax, 'Term updated.');
+      $message = 'Term updated.';
+      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
+        $count = EUM_Public_Meta::sync_users_for_job_path($term_id);
+        $message .= ' Public metadata refreshed for ' . (int)$count . ' assigned user(s); connected-site sync is queued.';
+      }
+      $this->redirect_with_msg($tax, $message);
     }
 
     if ($action === 'delete') {
       $term_id = isset($_POST['term_id']) ? intval($_POST['term_id']) : 0;
       if ($term_id <= 0) $this->redirect_with_msg($tax, 'Missing term id.', 'error');
+      $affected_users = [];
+      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
+        $affected_terms = [$term_id];
+        $descendants = get_term_children($term_id, 'eum_job_path');
+        if (!is_wp_error($descendants) && is_array($descendants)) $affected_terms = array_merge($affected_terms, array_map('intval', $descendants));
+        $affected_users = get_objects_in_term($affected_terms, 'eum_job_path');
+        if (is_wp_error($affected_users)) $affected_users = [];
+      }
       $deleted = wp_delete_term($term_id, $tax);
       if (is_wp_error($deleted)) $this->redirect_with_msg($tax, $deleted->get_error_message(), 'error');
-      $this->redirect_with_msg($tax, 'Term deleted.');
+      $message = 'Term deleted.';
+      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
+        foreach (array_unique(array_map('intval', (array)$affected_users)) as $user_id) EUM_Public_Meta::sync_user($user_id);
+        $message .= ' Public metadata refreshed for ' . (int)count((array)$affected_users) . ' affected user(s); connected-site sync is queued.';
+      }
+      $this->redirect_with_msg($tax, $message);
     }
 
     if ($action === 'sync_term_users') {
@@ -495,11 +513,13 @@ class EUM_Term_Manager {
         if ($inherit_mode === 'enable') update_term_meta($term_id, EUM_Taxonomies::term_meta_inherit_key(), 1);
         elseif ($inherit_mode === 'disable') update_term_meta($term_id, EUM_Taxonomies::term_meta_inherit_key(), 0);
         $updated_count++;
+        if (class_exists('EUM_Public_Meta')) $synced_count += EUM_Public_Meta::sync_users_for_job_path($term_id);
         if ($sync_users) $synced_count += EUM_Taxonomies::sync_users_for_term('eum_job_path', $term_id, $actor_user_id, 'Job Path Bulk Data Update');
       }
 
       $message = 'Updated ' . $updated_count . ' job path(s).';
-      if ($sync_users) $message .= ' Synced ' . $synced_count . ' user assignment(s).';
+      $message .= ' Refreshed public metadata for ' . (int)$synced_count . ' user assignment(s).';
+      if ($sync_users) $message .= ' Other path-derived data was synced too.';
       $this->redirect_with_msg($tax, $message);
     }
 
