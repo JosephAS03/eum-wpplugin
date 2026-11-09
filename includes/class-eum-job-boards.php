@@ -1186,8 +1186,7 @@ class EUM_Job_Boards {
     $row_style = 'padding:12px;border:1px solid #dcdcde;border-radius:6px;background:#f8f9fa;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;';
     ob_start();
     echo '<div data-eum-preapproved-bulk-row style="' . esc_attr($row_style) . '">';
-    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">First Name</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][first_name]"></p>';
-    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Last Name</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][last_name]"></p>';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Candidate Name</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][full_name]" placeholder="First Last"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Personal Email (optional)</label><input type="email" name="candidates[' . esc_attr((string)$index) . '][personal_email]"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Phone (optional)</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][mobile_phone]"></p>';
     echo '<p style="margin:0;"><button type="button" class="button" data-eum-preapproved-bulk-remove-row>Remove</button></p>';
@@ -1804,12 +1803,12 @@ class EUM_Job_Boards {
     $prepared_rows = [];
     foreach ($candidate_rows as $row) {
       if (!is_array($row)) continue;
-      $first_name = sanitize_text_field((string)($row['first_name'] ?? ''));
-      $last_name = sanitize_text_field((string)($row['last_name'] ?? ''));
+      $full_name = sanitize_text_field((string)($row['full_name'] ?? ''));
+      [$first_name, $last_name] = $this->split_candidate_name($full_name);
       $email_raw = trim((string)($row['personal_email'] ?? ''));
       $email = sanitize_email($email_raw);
       $phone = sanitize_text_field((string)($row['mobile_phone'] ?? ''));
-      if ($first_name === '' && $last_name === '' && $email_raw === '' && $phone === '') continue;
+      if ($full_name === '' && $email_raw === '' && $phone === '') continue;
       if ($email_raw !== '' && !is_email($email)) {
         $this->redirect_to_jobs_notice($return_url, 'One or more candidate rows contain an invalid personal email. No links were created.', 'error');
       }
