@@ -1061,6 +1061,7 @@
       if (region.matches('.eum-manual-candidate-preview')) window.EUMManualCandidatePreviewInit(region);
       region.querySelectorAll('.eum-manual-candidate-preview').forEach(window.EUMManualCandidatePreviewInit);
     }
+    if (window.EUMCandidateSourceToggleInit) window.EUMCandidateSourceToggleInit(region);
     var repeaters = [];
     if (region.matches('.eum-history-repeater')) repeaters.push(region);
     region.querySelectorAll('.eum-history-repeater').forEach(function (box) { repeaters.push(box); });
@@ -1190,6 +1191,37 @@
       return result;
     });
   }
+
+  document.addEventListener('click', function (event) {
+    var addButton = event.target.closest('[data-eum-preapproved-bulk-add-row]');
+    if (addButton) {
+      event.preventDefault();
+      var form = addButton.closest('form');
+      var rows = form ? form.querySelector('[data-eum-preapproved-bulk-rows]') : null;
+      var template = form ? form.querySelector('template[data-eum-preapproved-bulk-row-template]') : null;
+      if (!rows || !template) return;
+      if (rows.querySelectorAll('[data-eum-preapproved-bulk-row]').length >= 50) {
+        showAjaxStatus('Create no more than 50 candidate links per batch.', true);
+        return;
+      }
+      var index = parseInt(rows.getAttribute('data-eum-next-index') || '1', 10) || 1;
+      rows.setAttribute('data-eum-next-index', String(index + 1));
+      rows.insertAdjacentHTML('beforeend', template.innerHTML.replace(/__INDEX__/g, String(index)));
+      return;
+    }
+
+    var removeButton = event.target.closest('[data-eum-preapproved-bulk-remove-row]');
+    if (!removeButton) return;
+    event.preventDefault();
+    var row = removeButton.closest('[data-eum-preapproved-bulk-row]');
+    var rowList = row ? row.parentElement : null;
+    if (!row || !rowList) return;
+    if (rowList.querySelectorAll('[data-eum-preapproved-bulk-row]').length <= 1) {
+      row.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+      return;
+    }
+    row.remove();
+  });
 
   document.addEventListener('submit', function (event) {
     var form = event.target;

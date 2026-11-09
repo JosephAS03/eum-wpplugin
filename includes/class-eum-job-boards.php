@@ -83,6 +83,7 @@ class EUM_Job_Boards {
     add_action('admin_post_eum_job_board_candidate_delete', [$this, 'handle_candidate_delete']);
     add_action('admin_post_eum_job_board_candidate_add_manual', [$this, 'handle_candidate_add_manual']);
     add_action('admin_post_eum_job_board_candidate_create_invite', [$this, 'handle_candidate_create_invite']);
+    add_action('admin_post_eum_job_board_candidate_bulk_create_invites', [$this, 'handle_candidate_bulk_create_invites']);
     add_action('admin_post_eum_job_board_candidate_create_review_invite', [$this, 'handle_candidate_create_review_invite']);
     add_action('admin_post_eum_job_board_candidate_bulk_signup_redirect', [$this, 'handle_candidate_bulk_signup_redirect']);
     add_action('admin_post_eum_job_board_candidate_clone_invite', [$this, 'handle_candidate_clone_invite']);
@@ -327,7 +328,7 @@ class EUM_Job_Boards {
     }
     $out .= '</select>';
     $out .= '<input type="text" name="' . esc_attr($label_name) . '" data-eum-candidate-source-label style="margin-left:8px;max-width:240px;' . ($selected === 'other' ? '' : 'display:none;') . '" value="' . esc_attr($label_value) . '" placeholder="Source label">';
-    $out .= '<script>(function(){if(window.EUMCandidateSourceToggleInit)return;window.EUMCandidateSourceToggleInit=function(root){root.querySelectorAll("[data-eum-candidate-source-select]").forEach(function(sel){var label=sel.parentNode.querySelector("[data-eum-candidate-source-label]");if(!label)return;var sync=function(){label.style.display=sel.value==="other"?"inline-block":"none";};sel.addEventListener("change",sync);sync();});};document.addEventListener("DOMContentLoaded",function(){window.EUMCandidateSourceToggleInit(document);});}());</script>';
+    $out .= '<script>(function(){if(window.EUMCandidateSourceToggleInit)return;window.EUMCandidateSourceToggleInit=function(root){root.querySelectorAll("[data-eum-candidate-source-select]").forEach(function(sel){if(sel.dataset.eumCandidateSourceBound==="1")return;sel.dataset.eumCandidateSourceBound="1";var label=sel.parentNode.querySelector("[data-eum-candidate-source-label]");if(!label)return;var sync=function(){label.style.display=sel.value==="other"?"inline-block":"none";};sel.addEventListener("change",sync);sync();});};document.addEventListener("DOMContentLoaded",function(){window.EUMCandidateSourceToggleInit(document);});}());</script>';
     return $out;
   }
 
@@ -1147,6 +1148,50 @@ class EUM_Job_Boards {
     echo '<p style="grid-column:1/-1;"><label style="display:block;font-weight:600;margin-bottom:4px;">Internal Note <span style="font-weight:400;color:#646970;">optional</span></label><textarea name="notes" style="width:100%;min-height:70px;" placeholder="Example: Accepted at recruiting event / imported from partner system"></textarea></p>';
     echo '<p><button type="submit" class="button button-primary">Create Random Signup Link</button></p>';
     echo '</form><p class="description">This creates an anonymous pre-acceptance link identified only by its random code and this internal note. The candidate enters personal details and account password after opening the link.</p></div>';
+    echo $this->render_bulk_preaccepted_candidate_form($jobs);
+    return ob_get_clean();
+  }
+
+  private function render_bulk_preaccepted_candidate_form(array $jobs): string {
+    ob_start();
+    echo '<div style="margin-top:22px;padding-top:18px;border-top:1px solid #dcdcde;">';
+    echo '<h4 style="margin:0 0 8px;">Bulk Create Pre-Accepted Candidate Links</h4>';
+    echo '<p class="description">Choose one posting and add up to 50 candidates. Each completed row gets a separate signup link. Name, email, and phone can be filled in by the candidate later.</p>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-ajax-target="job-candidates,job-listings" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end;">';
+    echo '<input type="hidden" name="action" value="eum_job_board_candidate_bulk_create_invites"><input type="hidden" name="return_url" value="' . esc_attr($this->current_url()) . '">';
+    wp_nonce_field('eum_job_board_candidate_bulk_create_invites', 'eum_job_board_candidate_bulk_create_invites_nonce');
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Job Posting</label><select name="job_id" required><option value="">— Select —</option>';
+    foreach ($jobs as $job) {
+      $job_id = (int)$job->ID;
+      $label = (string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true);
+      if ($label === '') $label = get_the_title($job_id);
+      echo '<option value="' . $job_id . '">' . esc_html($label) . '</option>';
+    }
+    echo '</select></p>';
+    echo '<p><label style="display:block;font-weight:600;margin-bottom:4px;">Candidate Type / Source</label>' . $this->render_candidate_source_select('candidate_source', 'external', 'candidate_source_label', '', false) . '</p>';
+    echo '<p style="grid-column:1/-1;"><label style="display:block;font-weight:600;margin-bottom:4px;">After Signup Redirect <span style="font-weight:400;color:#646970;">optional</span></label><input type="url" name="signup_redirect_url" placeholder="' . esc_attr(home_url('/')) . '"><span class="description" style="display:block;margin-top:6px;">Applied to every invite in this batch.</span></p>';
+    echo '<div style="grid-column:1/-1;display:grid;gap:10px;" data-eum-preapproved-bulk-rows data-eum-next-index="1">';
+    echo $this->render_bulk_preaccepted_candidate_row(0);
+    echo '</div>';
+    echo '<template data-eum-preapproved-bulk-row-template>' . $this->render_bulk_preaccepted_candidate_row('__INDEX__') . '</template>';
+    echo '<p style="grid-column:1/-1;margin:0;"><button type="button" class="button" data-eum-preapproved-bulk-add-row>Add Candidate</button></p>';
+    echo '<p style="grid-column:1/-1;"><label style="display:block;font-weight:600;margin-bottom:4px;">Preset User Meta <span style="font-weight:400;color:#646970;">optional</span></label><textarea name="preset_user_meta" style="width:100%;min-height:70px;" placeholder="meta_key = value"></textarea><span class="description" style="display:block;margin-top:6px;">Shared defaults applied when any candidate accepts their invite.</span></p>';
+    echo '<p style="grid-column:1/-1;"><label style="display:block;font-weight:600;margin-bottom:4px;">Internal Note <span style="font-weight:400;color:#646970;">optional</span></label><textarea name="notes" style="width:100%;min-height:70px;"></textarea><span class="description" style="display:block;margin-top:6px;">This note is shared across the batch.</span></p>';
+    echo '<p style="grid-column:1/-1;margin:0;"><button type="submit" class="button button-primary">Create Candidate Links</button></p>';
+    echo '</form></div>';
+    return ob_get_clean();
+  }
+
+  private function render_bulk_preaccepted_candidate_row($index): string {
+    $row_style = 'padding:12px;border:1px solid #dcdcde;border-radius:6px;background:#f8f9fa;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;';
+    ob_start();
+    echo '<div data-eum-preapproved-bulk-row style="' . esc_attr($row_style) . '">';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">First Name</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][first_name]"></p>';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Last Name</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][last_name]"></p>';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Personal Email (optional)</label><input type="email" name="candidates[' . esc_attr((string)$index) . '][personal_email]"></p>';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Phone (optional)</label><input type="text" name="candidates[' . esc_attr((string)$index) . '][mobile_phone]"></p>';
+    echo '<p style="margin:0;"><button type="button" class="button" data-eum-preapproved-bulk-remove-row>Remove</button></p>';
+    echo '</div>';
     return ob_get_clean();
   }
 
@@ -1626,30 +1671,16 @@ class EUM_Job_Boards {
     $this->redirect_to_jobs_notice($return_url, $message);
   }
 
-  public function handle_candidate_create_invite(): void {
-    if (!is_user_logged_in()) wp_die('Not allowed.');
-    $actor_user_id = get_current_user_id();
-    if (!self::can_manage_jobs($actor_user_id)) wp_die('Not allowed.');
-    check_admin_referer('eum_job_board_candidate_create_invite', 'eum_job_board_candidate_create_invite_nonce');
-    $return_url = esc_url_raw((string)wp_unslash($_POST['return_url'] ?? home_url('/')));
-    if ($return_url === '') $return_url = home_url('/');
-    $redirect_raw = trim((string)wp_unslash($_POST['signup_redirect_url'] ?? ''));
-    $redirect_after = $this->sanitize_signup_redirect_url($redirect_raw);
-    if ($redirect_raw !== '' && $redirect_after === '') {
-      $this->redirect_to_jobs_notice($return_url, 'The signup redirect must be a valid http or https URL.', 'error');
-    }
-    $job_id = (int)($_POST['job_id'] ?? 0);
-    if ($job_id <= 0 || !$this->actor_can_manage_job($actor_user_id, $job_id)) { wp_safe_redirect($return_url); exit; }
-
-    [$source, $source_label] = $this->sanitize_candidate_source_from_request($_POST, 'external');
-    if ($source === 'internal') $source = 'external';
+  private function create_preaccepted_candidate_record(int $actor_user_id, int $job_id, string $source, string $source_label, array $prefill, string $note, string $redirect_after, $preset_user_meta): int {
     $code = wp_generate_password(32, false, false);
-    $note = sanitize_textarea_field((string)($_POST['notes'] ?? ''));
     $job_term_id = (int)get_post_meta($job_id, self::JOB_META_JOB_TERM, true);
-    $job_title_token = class_exists('EUM_Profiles') ? EUM_Profiles::normalize_job_title_value((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true), $job_term_id) : sanitize_text_field((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true));
+    $job_title_token = class_exists('EUM_Profiles')
+      ? EUM_Profiles::normalize_job_title_value((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true), $job_term_id)
+      : sanitize_text_field((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true));
     $profile = [];
     if ($job_term_id > 0) $profile['tax:eum_job_path'] = $job_term_id;
     if ($job_title_token !== '') $profile['custom:job_title'] = $job_title_token;
+    $note = sanitize_textarea_field($note);
     if ($note !== '') $profile['custom:bio'] = $note;
     $prefill_map = [
       'prefill_first_name' => 'core:first_name',
@@ -1664,7 +1695,7 @@ class EUM_Job_Boards {
       'prefill_residence_state' => 'custom:residence_state',
     ];
     foreach ($prefill_map as $post_key => $field_id) {
-      $raw_value = (string)($_POST[$post_key] ?? '');
+      $raw_value = trim((string)($prefill[$post_key] ?? ''));
       if (class_exists('EUM_Profiles')) {
         $normalized = EUM_Profiles::normalize_field_input($field_id, $raw_value);
         if ($normalized !== null && $normalized !== '' && $normalized !== []) $profile[$field_id] = $normalized;
@@ -1679,7 +1710,6 @@ class EUM_Job_Boards {
       'email' => '',
       'phone' => '',
     ]);
-
     $candidate_label = 'Pre-accepted Invite ' . substr($code, 0, 8);
     $candidate_id = (int)wp_insert_post([
       'post_type' => self::CPT_CANDIDATE,
@@ -1687,26 +1717,57 @@ class EUM_Job_Boards {
       'post_title' => $candidate_label,
       'post_author' => $actor_user_id,
     ]);
-    if ($candidate_id <= 0) {
-      wp_safe_redirect(add_query_arg(['eum_jobs_msg' => 'Pre-accepted invite could not be created.', 'eum_jobs_type' => 'error'], $return_url));
-      exit;
-    }
+    if ($candidate_id <= 0) return 0;
 
     update_post_meta($candidate_id, self::CAND_META_JOB_ID, $job_id);
     update_post_meta($candidate_id, self::CAND_META_FULL_NAME, $prefill_full_name !== '' ? $prefill_full_name : $candidate_label);
     update_post_meta($candidate_id, self::CAND_META_EMAIL, $prefill_email);
     update_post_meta($candidate_id, self::CAND_META_PHONE, $prefill_phone);
-    update_post_meta($candidate_id, self::CAND_META_SOURCE, $source);
-    update_post_meta($candidate_id, self::CAND_META_SOURCE_LABEL, $source_label);
+    update_post_meta($candidate_id, self::CAND_META_SOURCE, sanitize_key($source));
+    update_post_meta($candidate_id, self::CAND_META_SOURCE_LABEL, sanitize_text_field($source_label));
     update_post_meta($candidate_id, self::CAND_META_USER_ID, 0);
     update_post_meta($candidate_id, self::CAND_META_STATUS, 'pre_accepted');
     update_post_meta($candidate_id, self::CAND_META_PROFILE, $profile);
-    update_post_meta($candidate_id, self::CAND_META_PRESET_USER_META, $this->merged_candidate_preset_user_meta($job_id, (string)($_POST['preset_user_meta'] ?? '')));
+    update_post_meta($candidate_id, self::CAND_META_PRESET_USER_META, $this->merged_candidate_preset_user_meta($job_id, $preset_user_meta));
     update_post_meta($candidate_id, self::CAND_META_APPLIED_AT, current_time('mysql'));
     update_post_meta($candidate_id, self::CAND_META_INVITE_CODE, $code);
     update_post_meta($candidate_id, self::CAND_META_INVITE_CODE_LOOKUP, $this->invite_code_lookup($code));
     update_post_meta($candidate_id, self::CAND_META_INVITE_CREATED_AT, current_time('mysql'));
     if ($redirect_after !== '') update_post_meta($candidate_id, self::CAND_META_SIGNUP_REDIRECT_URL, $redirect_after);
+    return $candidate_id;
+  }
+
+  public function handle_candidate_create_invite(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    $actor_user_id = get_current_user_id();
+    if (!self::can_manage_jobs($actor_user_id)) wp_die('Not allowed.');
+    check_admin_referer('eum_job_board_candidate_create_invite', 'eum_job_board_candidate_create_invite_nonce');
+    $post = wp_unslash($_POST);
+    $return_url = esc_url_raw((string)($post['return_url'] ?? home_url('/')));
+    if ($return_url === '') $return_url = home_url('/');
+    $redirect_raw = trim((string)($post['signup_redirect_url'] ?? ''));
+    $redirect_after = $this->sanitize_signup_redirect_url($redirect_raw);
+    if ($redirect_raw !== '' && $redirect_after === '') {
+      $this->redirect_to_jobs_notice($return_url, 'The signup redirect must be a valid http or https URL.', 'error');
+    }
+    $job_id = (int)($post['job_id'] ?? 0);
+    if ($job_id <= 0 || !$this->actor_can_manage_job($actor_user_id, $job_id)) { wp_safe_redirect($return_url); exit; }
+
+    [$source, $source_label] = $this->sanitize_candidate_source_from_request($post, 'external');
+    if ($source === 'internal') $source = 'external';
+    $candidate_id = $this->create_preaccepted_candidate_record(
+      $actor_user_id,
+      $job_id,
+      $source,
+      $source_label,
+      $post,
+      (string)($post['notes'] ?? ''),
+      $redirect_after,
+      $post['preset_user_meta'] ?? ''
+    );
+    if ($candidate_id <= 0) {
+      $this->redirect_to_jobs_notice($return_url, 'Pre-accepted invite could not be created.', 'error');
+    }
 
     wp_safe_redirect(add_query_arg([
       'eum_tab' => 'jobs',
@@ -1715,6 +1776,72 @@ class EUM_Job_Boards {
       'eum_jobs_type' => 'success',
     ], $return_url));
     exit;
+  }
+
+  public function handle_candidate_bulk_create_invites(): void {
+    if (!is_user_logged_in()) wp_die('Not allowed.');
+    $actor_user_id = get_current_user_id();
+    if (!self::can_manage_jobs($actor_user_id)) wp_die('Not allowed.');
+    check_admin_referer('eum_job_board_candidate_bulk_create_invites', 'eum_job_board_candidate_bulk_create_invites_nonce');
+    $post = wp_unslash($_POST);
+    $return_url = esc_url_raw((string)($post['return_url'] ?? home_url('/')));
+    if ($return_url === '') $return_url = home_url('/');
+    $job_id = (int)($post['job_id'] ?? 0);
+    if ($job_id <= 0 || !$this->actor_can_manage_job($actor_user_id, $job_id)) {
+      $this->redirect_to_jobs_notice($return_url, 'Select a job posting you are allowed to manage.', 'error');
+    }
+
+    $redirect_raw = trim((string)($post['signup_redirect_url'] ?? ''));
+    $redirect_after = $this->sanitize_signup_redirect_url($redirect_raw);
+    if ($redirect_raw !== '' && $redirect_after === '') {
+      $this->redirect_to_jobs_notice($return_url, 'The signup redirect must be a valid http or https URL.', 'error');
+    }
+    $candidate_rows = is_array($post['candidates'] ?? null) ? $post['candidates'] : [];
+    if (count($candidate_rows) > 50) {
+      $this->redirect_to_jobs_notice($return_url, 'Create no more than 50 pre-approved candidate links per batch.', 'error');
+    }
+
+    $prepared_rows = [];
+    foreach ($candidate_rows as $row) {
+      if (!is_array($row)) continue;
+      $first_name = sanitize_text_field((string)($row['first_name'] ?? ''));
+      $last_name = sanitize_text_field((string)($row['last_name'] ?? ''));
+      $email_raw = trim((string)($row['personal_email'] ?? ''));
+      $email = sanitize_email($email_raw);
+      $phone = sanitize_text_field((string)($row['mobile_phone'] ?? ''));
+      if ($first_name === '' && $last_name === '' && $email_raw === '' && $phone === '') continue;
+      if ($email_raw !== '' && !is_email($email)) {
+        $this->redirect_to_jobs_notice($return_url, 'One or more candidate rows contain an invalid personal email. No links were created.', 'error');
+      }
+      $prepared_rows[] = [
+        'prefill_first_name' => $first_name,
+        'prefill_last_name' => $last_name,
+        'prefill_personal_email' => $email,
+        'prefill_mobile_phone' => $phone,
+      ];
+    }
+    if (empty($prepared_rows)) {
+      $this->redirect_to_jobs_notice($return_url, 'Add at least one candidate name, email, or phone number.', 'error');
+    }
+
+    [$source, $source_label] = $this->sanitize_candidate_source_from_request($post, 'external');
+    if ($source === 'internal') $source = 'external';
+    $note = sanitize_textarea_field((string)($post['notes'] ?? ''));
+    $preset_user_meta = $post['preset_user_meta'] ?? '';
+    $created = 0;
+    foreach ($prepared_rows as $prefill) {
+      if ($this->create_preaccepted_candidate_record($actor_user_id, $job_id, $source, $source_label, $prefill, $note, $redirect_after, $preset_user_meta) > 0) {
+        $created++;
+      }
+    }
+
+    $failed = count($prepared_rows) - $created;
+    if ($created === 0) {
+      $this->redirect_to_jobs_notice($return_url, 'No pre-approved candidate links could be created.', 'error');
+    }
+    $message = sprintf('Created %d pre-approved candidate link(s). Copy each signup link from the Candidates list.', $created);
+    if ($failed > 0) $message .= sprintf(' %d row(s) could not be saved.', $failed);
+    $this->redirect_to_jobs_notice(remove_query_arg(['eum_candidate'], $return_url), $message, $failed > 0 ? 'error' : 'success');
   }
 
   public function handle_candidate_create_review_invite(): void {
