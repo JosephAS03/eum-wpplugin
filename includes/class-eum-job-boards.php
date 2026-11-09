@@ -644,12 +644,12 @@ class EUM_Job_Boards {
       $notice_style = ($type === 'error')
         ? 'margin-bottom:16px;padding:12px 14px;border:1px solid #d63638;background:#fcf0f1;color:#8a2424;border-radius:6px;'
         : 'margin-bottom:16px;padding:12px 14px;border:1px solid #00a32a;background:#ecf7ed;color:#166534;border-radius:6px;';
-      echo '<div style="' . esc_attr($notice_style) . '">' . esc_html($msg) . '</div>';
+      echo '<div data-eum-job-notice="1" data-eum-notice-type="' . esc_attr($type === 'error' ? 'error' : 'success') . '" style="' . esc_attr($notice_style) . '">' . esc_html($msg) . '</div>';
     }
     echo '<div class="eum-job-board__grid">';
     echo '<div class="eum-job-board-card eum-job-board__editor" data-eum-ajax-ignore="1">';
     echo '<h3 style="margin-top:0;">' . ($editing ? 'Edit Job Posting' : 'Create Job Posting') . '</h3>';
-    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-ajax-target="job-listings">';
     echo '<input type="hidden" name="action" value="eum_job_board_save"><input type="hidden" name="return_url" value="' . esc_attr($this->current_url()) . '">';
     if ($editing) echo '<input type="hidden" name="job_id" value="' . (int)$editing->ID . '">';
     wp_nonce_field('eum_job_board_save', 'eum_job_board_nonce');
@@ -754,9 +754,9 @@ class EUM_Job_Boards {
         echo '<div class="eum-job-listing__details"><span><strong>Owner</strong> ' . esc_html($this->display_user_label($job_owner_user_id)) . '</span><span><strong>Active candidates</strong> ' . (int)$this->candidate_count_for_job($job_id) . '</span></div>';
         echo '<nav class="eum-job-listing__actions" data-eum-ajax-ignore="1" aria-label="Actions for ' . esc_attr($job_title) . '">';
         echo '<a class="button button-primary" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job_edit' => $job_id], $this->current_url())) . '">Edit</a>';
-        echo '<a class="button" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job' => $job_id], $this->current_url())) . '">Candidates</a>';
-        echo '<a class="button" href="' . esc_url($clone_url) . '">Clone</a>';
-        echo '<a class="button eum-job-listing__delete" href="' . esc_url($delete_url) . '" onclick="return confirm(&quot;Delete this job posting and all of its candidates? Pending candidate records will also be removed.&quot;);">Delete</a>';
+        echo '<a class="button" data-eum-ajax-target="job-listings,job-candidates" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job' => $job_id], $this->current_url())) . '">Candidates</a>';
+        echo '<a class="button" data-eum-ajax-target="job-listings" href="' . esc_url($clone_url) . '">Clone</a>';
+        echo '<a class="button eum-job-listing__delete" data-eum-ajax-target="job-listings,job-candidates" data-eum-confirm="Delete this job posting and all of its candidates? Pending candidate records will also be removed." href="' . esc_url($delete_url) . '">Delete</a>';
         echo '</nav></article>';
       }
       echo '</div>';
@@ -764,23 +764,24 @@ class EUM_Job_Boards {
     echo '</section>';
     echo '</div>';
 
-    $history_toggle_url = $show_historical_candidates
-      ? remove_query_arg(['eum_candidate_history'], $this->current_url())
-      : add_query_arg(['eum_candidate_history' => '1'], $this->current_url());
-    echo '<div class="eum-job-board-card" style="margin-top:24px;padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;">';
-    echo '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">';
-    echo '<div><h3 style="margin:0;">Candidates</h3><p class="description" style="margin:6px 0 0;">Active candidates stay in the main queue. Completed candidates are hidden by default but preserved for history.</p></div>';
-    echo '<a class="button" href="' . esc_url($history_toggle_url) . '">' . ($show_historical_candidates ? 'Hide Historical Candidates' : 'Show Historical Candidates') . '</a>';
-    echo '</div>';
-    if (!$show_historical_candidates && !empty($historical_candidates)) {
-      echo '<p class="description" style="margin-top:10px;">' . count($historical_candidates) . ' historical candidates are hidden from the default queue.</p>';
-    }
+    echo '<section class="eum-job-candidates" data-eum-ajax-region="job-candidates" data-eum-ajax-refresh="job-listings" aria-labelledby="eum-job-candidates-title">';
     $filter_job_id = (int)($_GET['eum_job'] ?? 0);
     $display_candidates = array_values(array_filter($candidates, function ($candidate) use ($filter_job_id): bool {
       return $filter_job_id <= 0 || (int)get_post_meta((int)$candidate->ID, self::CAND_META_JOB_ID, true) === $filter_job_id;
     }));
     foreach ($display_candidates as $candidate) $this->ensure_candidate_review_invite((int)$candidate->ID);
     $pending_invite_count = count(array_filter($display_candidates, fn($candidate) => $this->candidate_has_pending_signup_invite((int)$candidate->ID)));
+    $history_toggle_url = $show_historical_candidates
+      ? remove_query_arg(['eum_candidate_history'], $this->current_url())
+      : add_query_arg(['eum_candidate_history' => '1'], $this->current_url());
+    echo '<div class="eum-job-board-card eum-candidate-queue">';
+    echo '<div class="eum-candidate-queue__heading">';
+    echo '<div><h3 id="eum-job-candidates-title">Candidates</h3><p>Review applicants, invitations, and hiring progress.</p></div>';
+    echo '<div class="eum-candidate-queue__heading-actions"><span class="eum-candidate-queue__count">' . (int)count($display_candidates) . ' ' . (count($display_candidates) === 1 ? 'candidate' : 'candidates') . '</span><a class="button" data-eum-ajax-target="job-candidates" href="' . esc_url($history_toggle_url) . '">' . ($show_historical_candidates ? 'Hide history' : 'Show history') . '</a></div>';
+    echo '</div>';
+    if (!$show_historical_candidates && !empty($historical_candidates)) {
+      echo '<p class="description" style="margin-top:10px;">' . count($historical_candidates) . ' historical candidates are hidden from the default queue.</p>';
+    }
     if (!empty($display_candidates)) {
       if ($pending_invite_count > 0) {
         echo '<form id="eum-candidate-bulk-redirect-form" method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:16px 0;padding:14px;border:1px solid #d0d7de;border-radius:8px;background:#f8f9fa;">';
@@ -794,7 +795,8 @@ class EUM_Job_Boards {
         echo '<button type="submit" class="button button-primary">Apply to Selected Invites</button>';
         echo '</div></form>';
       }
-      echo '<div style="overflow:auto;"><table class="widefat striped"><thead><tr>' . ($pending_invite_count > 0 ? '<th scope="col"><label><input id="eum-candidate-select-all-pending" type="checkbox" form="eum-candidate-bulk-redirect-form" data-eum-select-all-pending-invites="1"> Select all</label></th>' : '') . '<th>Name</th><th>Job</th><th>Type</th><th>Status</th><th>Email</th><th>Invite Code</th><th>Actions</th></tr></thead><tbody>';
+      echo '<div class="eum-candidate-list" role="list">';
+      if ($pending_invite_count > 0) echo '<label class="eum-candidate-list__select-all"><input id="eum-candidate-select-all-pending" type="checkbox" form="eum-candidate-bulk-redirect-form" data-eum-select-all-pending-invites="1"> <span>Select all pending invites</span></label>';
       foreach ($display_candidates as $cand) {
         $cid = (int)$cand->ID;
         $job_id = (int)get_post_meta($cid, self::CAND_META_JOB_ID, true);
@@ -807,15 +809,33 @@ class EUM_Job_Boards {
         $invite_url = $can_clone_invite ? $this->candidate_signup_url($invite_code) : ($review_invite_code !== '' ? $this->candidate_review_invite_url($review_invite_code) : '');
         $review_invite_completed = (string)get_post_meta($cid, self::CAND_META_REVIEW_INVITE_COMPLETED_AT, true) !== '';
         $can_bulk_update_redirect = $this->candidate_has_pending_signup_invite($cid);
-        $invite_cell = $invite_code !== ''
-          ? '<code>' . esc_html($invite_code) . '</code><br><input type="text" readonly onclick="this.select();" aria-label="Copy candidate invite link" style="width:190px;max-width:100%;margin-top:4px;" value="' . esc_attr($invite_url) . '">' . ($review_invite_completed ? '<br><span class="description">Submitted</span>' : '')
-          : '—';
+        $candidate_name = (string)get_post_meta($cid, self::CAND_META_FULL_NAME, true);
+        $candidate_email = (string)get_post_meta($cid, self::CAND_META_EMAIL, true);
+        $candidate_job_title = (string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true);
+        if ($candidate_job_title === '') $candidate_job_title = get_the_title($job_id);
+        $candidate_status = $this->candidate_status_label((string)get_post_meta($cid, self::CAND_META_STATUS, true));
+        $candidate_status_key = sanitize_key((string)get_post_meta($cid, self::CAND_META_STATUS, true));
         $review_invite_action = $this->candidate_review_invite_eligible($cid)
           ? '<a class="button button-small" href="' . esc_url($candidate_review_invite_url) . '">' . ($review_invite_completed ? 'New Review Link' : 'Refresh Review Link') . '</a> '
           : '';
-        echo '<tr>' . ($pending_invite_count > 0 ? '<td>' . ($can_bulk_update_redirect ? '<input type="checkbox" form="eum-candidate-bulk-redirect-form" name="candidate_ids[]" data-eum-candidate-bulk-checkbox="1" value="' . $cid . '" aria-label="Select ' . esc_attr((string)get_post_meta($cid, self::CAND_META_FULL_NAME, true)) . ' for bulk redirect update">' : '—') . '</td>' : '') . '<td>' . esc_html((string)get_post_meta($cid, self::CAND_META_FULL_NAME, true)) . '</td><td>' . esc_html((string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true)) . '</td><td>' . esc_html($this->candidate_source_label($cid)) . '</td><td>' . esc_html($this->candidate_status_label((string)get_post_meta($cid, self::CAND_META_STATUS, true))) . '</td><td>' . esc_html((string)get_post_meta($cid, self::CAND_META_EMAIL, true)) . '</td><td>' . $invite_cell . '</td><td><a class="button button-small" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_candidate' => $cid], $this->current_url())) . '">Open</a> ' . $review_invite_action . ($can_clone_invite ? '<a class="button button-small" href="' . esc_url($candidate_clone_invite_url) . '">Clone Invite</a> ' : '') . '<a class="button button-small" href="' . esc_url($candidate_delete_url) . '" onclick="return confirm(&quot;Delete this candidate record? Pending hire workflow items tied to this candidate will also be removed.&quot;);">Delete</a></td></tr>';
+        echo '<article class="eum-candidate-card" role="listitem">';
+        echo '<div class="eum-candidate-card__top">';
+        if ($pending_invite_count > 0 && $can_bulk_update_redirect) echo '<label class="eum-candidate-card__select"><input type="checkbox" form="eum-candidate-bulk-redirect-form" name="candidate_ids[]" data-eum-candidate-bulk-checkbox="1" value="' . $cid . '" aria-label="Select ' . esc_attr($candidate_name) . ' for bulk redirect update"><span class="screen-reader-text">Select candidate for bulk redirect update</span></label>';
+        echo '<div class="eum-candidate-card__identity"><h4>' . esc_html($candidate_name !== '' ? $candidate_name : 'Candidate') . '</h4>';
+        if ($candidate_email !== '') echo '<a href="mailto:' . esc_attr($candidate_email) . '">' . esc_html($candidate_email) . '</a>';
+        echo '</div><div class="eum-candidate-card__badges"><span class="eum-candidate-badge eum-candidate-badge--status eum-candidate-badge--' . esc_attr($candidate_status_key) . '">' . esc_html($candidate_status) . '</span><span class="eum-candidate-badge">' . esc_html($this->candidate_source_label($cid)) . '</span></div>';
+        echo '</div>';
+        echo '<div class="eum-candidate-card__job"><span>Applied for</span><strong>' . esc_html($candidate_job_title !== '' ? $candidate_job_title : 'Job posting unavailable') . '</strong></div>';
+        if ($invite_code !== '') {
+          echo '<div class="eum-candidate-card__invite"><div><span>Invite code</span><code>' . esc_html($invite_code) . '</code></div>';
+          echo '<div class="eum-candidate-card__invite-link"><input type="text" readonly onclick="this.select();" aria-label="Candidate invite link" value="' . esc_attr($invite_url) . '"><button type="button" class="button button-small" data-eum-copy-candidate-link="1">Copy link</button></div>';
+          if ($review_invite_completed) echo '<span class="eum-candidate-card__submitted">Review form submitted</span>';
+          echo '</div>';
+        }
+        echo '<div class="eum-candidate-card__actions"><a class="button button-primary" data-eum-ajax-target="job-candidates" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_candidate' => $cid], $this->current_url())) . '">View candidate</a> ' . $review_invite_action . ($can_clone_invite ? '<a class="button button-small" data-eum-ajax-target="job-candidates,job-listings" href="' . esc_url($candidate_clone_invite_url) . '">Clone invite</a> ' : '') . '<a class="button button-small eum-candidate-card__delete" data-eum-confirm="Delete this candidate record? Pending hire workflow items tied to this candidate will also be removed." href="' . esc_url($candidate_delete_url) . '">Delete</a></div>';
+        echo '</article>';
       }
-      echo '</tbody></table></div>';
+      echo '</div>';
     } else echo '<p>' . ($show_historical_candidates ? 'No candidates found.' : 'No active candidates right now.') . '</p>';
     echo '<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e4e7;">';
     echo '<h4 style="margin:0 0 8px;">Add Candidate Manually</h4>';
@@ -865,6 +885,7 @@ class EUM_Job_Boards {
     echo '<script>(function(){if(window.EUMManualCandidatePreviewInit)return;window.EUMManualCandidatePreviewInit=function(container){var form=container.closest("form");if(!form)return;var job=form.querySelector(\'[name="job_id"]\');var first=form.querySelector(\'[name="first_name"]\');var last=form.querySelector(\'[name="last_name"]\');if(!job||!first||!last)return;var jobs=JSON.parse(container.getAttribute("data-jobs")||"{}");var setText=function(key,value){var target=container.querySelector(\'[data-preview="\'+key+\'"]\');if(target)target.textContent=value;};var slugify=function(value){return (value||"").toLowerCase().replace(/[^a-z0-9._-]/g,"");};var update=function(){var selected=jobs[job.value]||null;var firstName=(first.value||"").trim();var lastName=(last.value||"").trim();var firstPart=firstName?firstName.split(/\\s+/)[0]:"";var lastParts=lastName?lastName.split(/\\s+/):[];var lastPart=lastParts.length?lastParts[lastParts.length-1]:"";var username=slugify(firstPart + lastPart);var divisionDomain=selected&&selected.division_domain?selected.division_domain:"";setText("job_path",selected&&selected.job_path?selected.job_path:"Select a posting");setText("job_title",selected&&selected.job_title?selected.job_title:"Select a posting");setText("division",selected&&selected.division_label?selected.division_label:"Select a posting");setText("division_domain",divisionDomain?divisionDomain:"Select a posting");if(divisionDomain&&username){setText("company_email",username+"@"+divisionDomain);}else if(divisionDomain){setText("company_email","Enter first and last name to preview");}else{setText("company_email","Enter a name and select a posting");}};["change","input"].forEach(function(eventName){job.addEventListener(eventName,update);first.addEventListener(eventName,update);last.addEventListener(eventName,update);});update();};document.addEventListener("DOMContentLoaded",function(){document.querySelectorAll(".eum-manual-candidate-preview").forEach(function(container){window.EUMManualCandidatePreviewInit(container);});});}());</script></div>';
     echo $this->render_preaccepted_candidate_form($jobs);
     if ($selected_candidate > 0 && $this->actor_can_view_candidate($user_id, $selected_candidate)) echo $this->render_candidate_editor($selected_candidate, $user_id);
+    echo '</section>';
     echo '</div></div>';
     return ob_get_clean();
     } catch (\Throwable $e) {
@@ -1384,7 +1405,7 @@ class EUM_Job_Boards {
     update_post_meta($new_job_id, self::JOB_META_OWNER_UID, $actor_user_id);
     $job_term_id = (int)get_post_meta($new_job_id, self::JOB_META_JOB_TERM, true);
     update_post_meta($new_job_id, self::JOB_META_OWNER_MIDS, $this->owner_related_manager_ids($actor_user_id, $job_term_id));
-    wp_safe_redirect(add_query_arg(['eum_tab' => 'jobs', 'eum_job_edit' => $new_job_id, 'eum_jobs_msg' => 'Job listing cloned as a draft.'], $return_url));
+    wp_safe_redirect(add_query_arg(['eum_tab' => 'jobs', 'eum_jobs_msg' => 'Job listing cloned as a draft.'], remove_query_arg(['eum_job_edit'], $return_url)));
     exit;
   }
 
@@ -2657,7 +2678,7 @@ class EUM_Job_Boards {
       echo '</form>';
     }
     $candidate_delete_url = wp_nonce_url(add_query_arg(['action' => 'eum_job_board_candidate_delete', 'candidate_id' => $candidate_id, 'return_url' => $this->current_url()], admin_url('admin-post.php')), 'eum_job_board_candidate_delete_' . $candidate_id);
-    echo '<p style="margin-top:12px;"><a class="button" href="' . esc_url($candidate_delete_url) . '" onclick="return confirm(&quot;Delete this candidate record? Pending hire workflow items tied to this candidate will also be removed.&quot;);">Delete Candidate</a></p>';
+    echo '<p style="margin-top:12px;"><a class="button" data-eum-confirm="Delete this candidate record? Pending hire workflow items tied to this candidate will also be removed." href="' . esc_url($candidate_delete_url) . '">Delete Candidate</a></p>';
     echo '</div>' . $this->render_history_repeater_script();
     return ob_get_clean();
     } catch (\Throwable $e) {
@@ -4538,7 +4559,8 @@ class EUM_Job_Boards {
   }
 
   private function current_url(): string {
-    return (is_ssl() ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? parse_url(home_url('/'), PHP_URL_HOST)) . ($_SERVER['REQUEST_URI'] ?? '/');
+    $url = (is_ssl() ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? parse_url(home_url('/'), PHP_URL_HOST)) . ($_SERVER['REQUEST_URI'] ?? '/');
+    return remove_query_arg(['eum_jobs_msg', 'eum_jobs_type'], $url);
   }
 
   private function term_full_path(string $tax, int $term_id, string $sep): string {

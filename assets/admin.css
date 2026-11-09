@@ -739,14 +739,138 @@ body:not(.wp-admin) .eum-ar form .description {
   text-align: center;
 }
 .eum-job-listings__empty strong { color: #344054; }
+.eum-job-candidates { min-width: 0; }
+.eum-candidate-queue {
+  padding: 22px;
+  border: 1px solid #e1e7ee;
+  background: #fff;
+}
+.eum-candidate-queue__heading,
+.eum-candidate-card__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.eum-candidate-queue__heading { margin-bottom: 16px; }
+.eum-candidate-queue__heading h3 {
+  margin: 0;
+  color: #17212f;
+  font-size: 20px;
+  line-height: 1.3;
+}
+.eum-candidate-queue__heading p {
+  margin: 5px 0 0;
+  color: #667085;
+}
+.eum-candidate-queue__heading-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.eum-candidate-queue__count {
+  color: #536174;
+  font-size: 13px;
+  font-weight: 700;
+}
+.eum-candidate-list { display: grid; gap: 10px; }
+.eum-candidate-list__select-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  color: #536174;
+  font-size: 13px;
+  font-weight: 600;
+}
+.eum-candidate-card {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e3e8ee;
+  border-radius: 15px;
+  background: #f7f8fa;
+}
+.eum-candidate-card__top { align-items: center; }
+.eum-candidate-card__select { flex: 0 0 auto; }
+.eum-candidate-card__identity { flex: 1 1 auto; min-width: 0; }
+.eum-candidate-card__identity h4 {
+  margin: 0;
+  color: #17212f;
+  font-size: 17px;
+  line-height: 1.35;
+}
+.eum-candidate-card__identity a {
+  display: inline-block;
+  margin-top: 3px;
+  color: #536174;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.eum-candidate-card__badges { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 5px; }
+.eum-candidate-badge {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e9eef5;
+  color: #344054;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.eum-candidate-badge--status { background: #e7f4ea; color: #176b35; }
+.eum-candidate-badge--new,
+.eum-candidate-badge--review,
+.eum-candidate-badge--pending_hire { background: #fff1d6; color: #825800; }
+.eum-candidate-badge--pre_accepted { background: #f0eaff; color: #5b3ba5; }
+.eum-candidate-badge--selected { background: #e6f3fb; color: #075985; }
+.eum-candidate-badge--rejected { background: #fce8e8; color: #a12622; }
+.eum-candidate-card__job,
+.eum-candidate-card__invite {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #536174;
+  font-size: 13px;
+}
+.eum-candidate-card__job strong { color: #344054; }
+.eum-candidate-card__invite {
+  justify-content: flex-start;
+  padding: 11px 12px;
+  border: 1px solid #e3e8ee;
+  border-radius: 12px;
+  background: #fff;
+}
+.eum-candidate-card__invite > div:first-child { display: grid; gap: 3px; }
+.eum-candidate-card__invite > div:first-child span,
+.eum-candidate-card__job > span { color: #667085; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.eum-candidate-card__invite code { color: #344054; font-size: 12px; }
+.eum-candidate-card__invite-link { display: flex; flex: 1 1 280px; gap: 7px; min-width: 0; }
+.eum-candidate-card__invite-link input { flex: 1 1 auto; width: 100%; min-width: 0; }
+.eum-candidate-card__submitted { color: #176b35; font-size: 12px; font-weight: 600; }
+.eum-candidate-card__actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.eum-candidate-card__actions .button { margin: 0; }
+.eum-candidate-card__delete { color: #a12622 !important; }
 @media (max-width: 600px) {
   .eum-job-board__editor,
-  .eum-job-board__list { padding: 15px; }
+  .eum-job-board__list,
+  .eum-candidate-queue { padding: 15px; }
   .eum-job-listing__top { display: grid; }
   .eum-job-listing__badges { justify-content: flex-start; }
   .eum-job-listing__actions .button { flex: 1 1 auto; text-align: center; }
   .eum-job-list-filters__checks { align-items: flex-start; }
   .eum-job-list-filters__checks fieldset { width: 100%; }
+  .eum-candidate-queue__heading { display: grid; }
+  .eum-candidate-queue__heading-actions { justify-content: space-between; }
+  .eum-candidate-card__top { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .eum-candidate-card__select { grid-row: span 2; padding-top: 3px; }
+  .eum-candidate-card__badges { grid-column: 2; }
+  .eum-candidate-card__actions .button { flex: 1 1 auto; text-align: center; }
 }
 
 .eum-map-builder {
