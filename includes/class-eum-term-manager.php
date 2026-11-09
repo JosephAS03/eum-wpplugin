@@ -112,13 +112,19 @@ class EUM_Term_Manager {
     if ($tax === 'eum_job_path') {
       $this->render_bulk_panel($bulk_form_id);
       $this->render_bulk_create_panel();
+      echo '<div class="eum-job-path-search" style="margin:18px 0 10px;">';
+      echo '<label for="eum-job-path-search" style="display:block;font-weight:600;margin-bottom:5px;">Search all Job Paths</label>';
+      echo '<input type="search" id="eum-job-path-search" class="regular-text" style="width:min(560px,100%);" placeholder="Search a term or any part of its full path" autocomplete="off">';
+      echo '<p class="description" style="margin:5px 0 0;">Search includes every Job Path across the site, including the full path above each term.</p>';
+      echo '<p id="eum-job-path-search-results" class="description" aria-live="polite" style="margin:4px 0 0;"></p>';
+      echo '</div>';
     }
 
     if (empty($terms)) {
       echo '<p>No terms yet.</p>';
     } elseif ($is_h) {
       $tree = $this->build_tree($terms);
-      echo '<table class="widefat striped eum-terms-table">';
+      echo '<table class="widefat striped eum-terms-table"' . ($tax === 'eum_job_path' ? ' data-eum-job-path-search-table="1"' : '') . '>';
       echo '<thead><tr>';
       if ($tax === 'eum_job_path') echo '<th style="width:42px;"><input type="checkbox" data-eum-check-all="' . esc_attr($bulk_form_id) . '"></th>';
       echo '<th>Name</th><th>Full Path</th>';
@@ -131,6 +137,9 @@ class EUM_Term_Manager {
       echo '<th style="width:170px;">Actions</th></tr></thead><tbody>';
       $this->render_tree_rows($tax, $tree, 0, $bulk_form_id);
       echo '</tbody></table>';
+      if ($tax === 'eum_job_path') {
+        echo '<script>(function(){var input=document.getElementById("eum-job-path-search"),table=document.querySelector("[data-eum-job-path-search-table]");if(!input||!table)return;var rows=Array.prototype.slice.call(table.querySelectorAll("tbody tr[data-eum-job-path-search]")),status=document.getElementById("eum-job-path-search-results");var normalize=function(value){return String(value||"").toLocaleLowerCase().replace(/[\\/>→]+/g," ").replace(/\\s+/g," ").trim();};var filter=function(){var query=normalize(input.value),visible=0;rows.forEach(function(row){var matches=!query||normalize(row.getAttribute("data-eum-job-path-search")).indexOf(query)!==-1;row.style.display=matches?"":"none";if(matches)visible++;});if(status)status.textContent=query?visible+" Job Path(s) found.":"Showing all "+rows.length+" Job Paths.";};input.addEventListener("input",filter);filter();}());</script>';
+      }
     } else {
       echo '<table class="widefat striped eum-terms-table"><thead><tr><th>Name</th>';
       if (in_array($tax, ['eum_user_group', 'eum_project'], true)) echo '<th>Manager IDs</th>';
@@ -723,7 +732,7 @@ class EUM_Term_Manager {
       $mapping_count = class_exists('EUM_Taxonomies') ? count(EUM_Taxonomies::parse_term_meta_mapping(EUM_Taxonomies::term_meta_mapping_raw($term_id))) : 0;
       $inherits = class_exists('EUM_Taxonomies') ? EUM_Taxonomies::term_inherits_parent($term_id) : false;
 
-      echo '<tr>';
+      echo '<tr' . ($tax === 'eum_job_path' ? ' data-eum-job-path-search="' . esc_attr($full) . '"' : '') . '>';
       if ($tax === 'eum_job_path') {
         echo '<td><input type="checkbox" name="eum_bulk_term_ids[]" value="' . $term_id . '" form="' . esc_attr($bulk_form_id) . '" data-eum-check-item="' . esc_attr($bulk_form_id) . '"></td>';
       }

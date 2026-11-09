@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Enterprise User Management
  * Description: Enterprise-grade user meta, personnel files, user groups, job/location paths, projects, managers, and bulk import/export and auditing tools.
- * Version: 0.7.86-rebuild
+ * Version: 0.7.87-rebuild
  * Author: JAS Enterprises
  */
 
