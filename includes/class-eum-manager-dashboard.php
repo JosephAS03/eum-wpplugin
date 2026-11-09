@@ -186,7 +186,7 @@ class EUM_Manager_Dashboard {
 
     ob_start();
 
-    echo '<div class="eum-my-team">';
+    echo '<div class="eum-my-team" data-eum-ajax-region="my-team">';
     echo '<h3>My Team</h3>';
 
     if (!empty($args['show_filters'])) {

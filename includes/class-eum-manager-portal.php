@@ -42,7 +42,7 @@ class EUM_Manager_Portal {
     }
 
     ob_start();
-    echo '<div class="eum-manager-portal">';
+    echo '<div class="eum-manager-portal" data-eum-ajax-region="manager-portal">';
     echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">';
     echo $this->tab_link('team', 'My Team', $requested_tab === 'team');
     echo $this->tab_link('employee-list', 'Employee List', $requested_tab === 'employee-list');
@@ -379,7 +379,7 @@ class EUM_Manager_Portal {
       : ($mode === 'terminated'
       ? 'Separated, simpler management for rehirable and non-rehireable former employees.'
       : 'A cleaner directory of your active team members.');
-    echo '<section class="eum-directory eum-directory--' . esc_attr($mode) . '">';
+    echo '<section class="eum-directory eum-directory--' . esc_attr($mode) . '" data-eum-ajax-region="manager-directory">';
     echo '<div class="eum-directory__hero"><div><h3>' . esc_html($title) . '</h3><p>' . esc_html($subtitle) . '</p></div></div>';
 
     if ($show_filters) {

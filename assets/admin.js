@@ -789,6 +789,7 @@
     if (!form || !values || typeof values !== 'object') return;
     var method = (form.getAttribute('method') || 'get').toLowerCase();
     var action = form.getAttribute('action') || window.location.href;
+    var region = form.closest('[data-eum-ajax-region]');
     if (method === 'get') {
       var url = new URL(action, window.location.href);
       url.search = '';
@@ -800,6 +801,10 @@
         }
         url.searchParams.set(key, raw);
       });
+      if (region) {
+        requestAjaxRegion(region, url.toString(), { method: 'GET' });
+        return;
+      }
       window.location.assign(url.toString());
       return;
     }
@@ -818,8 +823,8 @@
         temp.appendChild(input);
       });
     });
-    document.body.appendChild(temp);
-    temp.submit();
+    (region || document.body).appendChild(temp);
+    temp.requestSubmit();
   }
 
   function refreshFilterPresetUI(form, shell) {
@@ -945,5 +950,196 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('form[data-eum-save-filters="1"]').forEach(initSaveableFilterForm);
+  });
+
+  var activeAjaxRegionKey = '';
+  var ajaxRequestCount = 0;
+
+  function regionSelector(key) {
+    return '[data-eum-ajax-region="' + String(key || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
+  }
+
+  function showAjaxStatus(message, isError) {
+    var status = document.getElementById('eum-ajax-status');
+    if (!status) {
+      status = document.createElement('div');
+      status.id = 'eum-ajax-status';
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      status.style.cssText = 'position:fixed;z-index:100000;right:16px;bottom:16px;max-width:min(440px,calc(100vw - 32px));padding:11px 15px;border-radius:8px;background:#1d2327;color:#fff;box-shadow:0 4px 18px rgba(0,0,0,.2);font:14px/1.4 sans-serif;';
+      document.body.appendChild(status);
+    }
+    status.textContent = message;
+    status.style.background = isError ? '#b32d2e' : '#1d2327';
+    status.hidden = false;
+    window.clearTimeout(status._eumTimer);
+    if (message !== 'Updating…' && message !== 'Saving…') {
+      status._eumTimer = window.setTimeout(function () { if (status.parentNode) status.parentNode.removeChild(status); }, isError ? 7000 : 2200);
+    }
+    return status;
+  }
+
+  function reinitializeAjaxRegion(region) {
+    if (!region) return;
+    region.querySelectorAll('form[data-eum-save-filters="1"]').forEach(initSaveableFilterForm);
+    if (window.EUMJobPathPickerInit) {
+      if (region.matches('.eum-job-path-picker')) window.EUMJobPathPickerInit(region);
+      region.querySelectorAll('.eum-job-path-picker').forEach(window.EUMJobPathPickerInit);
+    }
+    if (window.EUMTaxonomyPathPickerInit) {
+      if (region.matches('.eum-taxonomy-path-picker')) window.EUMTaxonomyPathPickerInit(region);
+      region.querySelectorAll('.eum-taxonomy-path-picker').forEach(window.EUMTaxonomyPathPickerInit);
+    }
+    if (region.matches('[data-eum-schedule-wrap]')) {
+      var scripts = region.querySelectorAll('script:not([src])');
+      scripts.forEach(function (source) {
+        if (source.textContent.indexOf('data-eum-schedule-wrap') === -1) return;
+        var executable = document.createElement('script');
+        executable.textContent = source.textContent;
+        document.body.appendChild(executable);
+        executable.parentNode.removeChild(executable);
+      });
+    }
+    region.dispatchEvent(new CustomEvent('eum:region-updated', { bubbles: true }));
+  }
+
+  function buildGetUrl(form, submitter) {
+    var url = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+    Array.prototype.forEach.call(form.elements || [], function (control) {
+      if (control && control.name) url.searchParams.delete(control.name);
+    });
+    var data;
+    try {
+      data = submitter ? new FormData(form, submitter) : new FormData(form);
+    } catch (error) {
+      data = new FormData(form);
+      if (submitter && submitter.name) data.append(submitter.name, submitter.value || '');
+    }
+    data.forEach(function (value, name) {
+      if (typeof value === 'string') url.searchParams.append(name, value);
+    });
+    return url;
+  }
+
+  function buildPostData(form, submitter) {
+    try {
+      return submitter ? new FormData(form, submitter) : new FormData(form);
+    } catch (error) {
+      var data = new FormData(form);
+      if (submitter && submitter.name) data.append(submitter.name, submitter.value || '');
+      return data;
+    }
+  }
+
+  function replaceAjaxRegion(region, html, responseUrl, options) {
+    var parser = new DOMParser();
+    var parsed = parser.parseFromString(html, 'text/html');
+    var key = region.getAttribute('data-eum-ajax-region');
+    var replacement = parsed.querySelector(regionSelector(key));
+    if (!replacement) {
+      window.location.assign(responseUrl || window.location.href);
+      return false;
+    }
+    var updated = document.importNode(replacement, true);
+    region.replaceWith(updated);
+    activeAjaxRegionKey = key;
+    reinitializeAjaxRegion(updated);
+    if (options && options.pushState) {
+      window.history.pushState({ eumAjaxRegion: key }, '', responseUrl || window.location.href);
+    }
+    return true;
+  }
+
+  function requestAjaxRegion(region, url, options) {
+    if (!region || region.getAttribute('data-eum-ajax-busy') === '1') return Promise.resolve(false);
+    var key = region.getAttribute('data-eum-ajax-region');
+    activeAjaxRegionKey = key;
+    region.setAttribute('data-eum-ajax-busy', '1');
+    region.setAttribute('aria-busy', 'true');
+    ajaxRequestCount++;
+    showAjaxStatus(options && options.isPost ? 'Saving…' : 'Updating…', false);
+    var fetchOptions = {
+      method: options && options.method ? options.method : 'GET',
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      redirect: 'follow',
+      cache: 'no-store'
+    };
+    if (fetchOptions.method === 'POST') fetchOptions.body = options.body;
+    return window.fetch(url, fetchOptions).then(function (response) {
+      return response.text().then(function (html) {
+        var current = document.querySelector(regionSelector(key));
+        if (!current) return false;
+        var replaced = replaceAjaxRegion(current, html, response.url || url, { pushState: !(options && options.popstate) });
+        if (replaced) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
+        return replaced;
+      });
+    }).catch(function () {
+      showAjaxStatus(options && options.isPost ? 'Couldn’t confirm the save. Reload to check whether it completed.' : 'Couldn’t update this section. Please try again.', true);
+      return false;
+    }).then(function (result) {
+      ajaxRequestCount = Math.max(0, ajaxRequestCount - 1);
+      var current = document.querySelector(regionSelector(key));
+      if (current) {
+        current.removeAttribute('data-eum-ajax-busy');
+        current.removeAttribute('aria-busy');
+      }
+      if (ajaxRequestCount === 0) {
+        var status = document.getElementById('eum-ajax-status');
+        if (status && (status.textContent === 'Saving…' || status.textContent === 'Updating…')) status.parentNode.removeChild(status);
+      }
+      return result;
+    });
+  }
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form || !form.matches || !form.matches('form')) return;
+    var region = form.closest('[data-eum-ajax-region]');
+    if (!region || form.target && form.target !== '_self') return;
+    var method = String(form.method || 'get').toUpperCase();
+    if (method === 'GET') {
+      var getUrl = buildGetUrl(form, event.submitter);
+      if (getUrl.origin !== window.location.origin) return;
+      event.preventDefault();
+      requestAjaxRegion(region, getUrl.toString(), { method: 'GET' });
+      return;
+    }
+    if (method !== 'POST' || form.enctype === 'text/plain') return;
+    var postUrl;
+    try { postUrl = new URL(form.action || window.location.href, window.location.href); } catch (error) { return; }
+    if (postUrl.origin !== window.location.origin) return;
+    event.preventDefault();
+    var submitter = event.submitter || null;
+    if (submitter && submitter.disabled) return;
+    var postData = buildPostData(form, submitter);
+    if (submitter) submitter.disabled = true;
+    requestAjaxRegion(region, postUrl.toString(), {
+      method: 'POST',
+      body: postData,
+      isPost: true
+    }).then(function () {
+      if (submitter && submitter.isConnected) submitter.disabled = false;
+    });
+  }, true);
+
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (link.target && link.target !== '_self' || link.hasAttribute('download')) return;
+    var region = link.closest('[data-eum-ajax-region]');
+    if (!region) return;
+    var url;
+    try { url = new URL(link.href, window.location.href); } catch (error) { return; }
+    if (url.origin !== window.location.origin || url.hash && url.href.split('#')[0] === window.location.href.split('#')[0]) return;
+    event.preventDefault();
+    requestAjaxRegion(region, url.toString(), { method: 'GET' });
+  }, true);
+
+  window.addEventListener('popstate', function (event) {
+    var key = event.state && event.state.eumAjaxRegion ? event.state.eumAjaxRegion : activeAjaxRegionKey;
+    var region = key ? document.querySelector(regionSelector(key)) : null;
+    if (!region) return;
+    requestAjaxRegion(region, window.location.href, { method: 'GET', popstate: true });
   });
 })();

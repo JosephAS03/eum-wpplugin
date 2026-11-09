@@ -68,6 +68,7 @@ class EUM_Manager_IDs {
       wp_die('Not allowed.');
     }
 
+    echo '<div class="wrap" data-eum-ajax-region="manager-ids">';
     if (!empty($_GET['eum_msg'])) {
       $msg = sanitize_text_field((string)$_GET['eum_msg']);
       $type = !empty($_GET['eum_type']) ? sanitize_key((string)$_GET['eum_type']) : 'success';
@@ -105,7 +106,6 @@ class EUM_Manager_IDs {
     $users = get_users(['fields' => ['ID', 'display_name', 'user_login']]);
     $division_options = class_exists('EUM_Company_Divisions') ? EUM_Company_Divisions::options_for_select() : [];
 
-    echo '<div class="wrap">';
     echo '<h1>Manager IDs</h1>';
     echo '<p class="description">A Manager ID can apply to a Job Path branch alone or to a specific Job Path + Job Title lane. Job Path + Job Title lanes inherit down the branch first, then the closest generic path fills in behind them. Users may still override by Manager Code or Manager ID on their profile.</p>';
 

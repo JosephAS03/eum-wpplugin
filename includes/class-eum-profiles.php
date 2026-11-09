@@ -1289,7 +1289,7 @@ class EUM_Profiles {
     }
 
     ob_start();
-    echo '<div class="eum-private-profile eum-private-profile__section" style="max-width:1100px;">';
+    echo '<div class="eum-private-profile eum-private-profile__section" data-eum-ajax-region="private-profile" style="max-width:1100px;">';
     echo '<div class="eum-private-profile__hero">';
     echo self::profile_avatar_html($target_user_id, 108, 'eum-private-profile__hero-avatar');
     echo '<div class="eum-private-profile__hero-copy">';
@@ -1453,7 +1453,7 @@ class EUM_Profiles {
     if (!$user) return '<div class="eum-profile-appearance"><p>User not found.</p></div>';
 
     ob_start();
-    echo '<div class="eum-profile-appearance eum-private-profile" style="max-width:900px;">';
+    echo '<div class="eum-profile-appearance eum-private-profile" data-eum-ajax-region="profile-appearance" style="max-width:900px;">';
     echo '<header class="eum-profile-appearance__header"><h1>Appearance</h1><p>Manage the profile photo and color shown across the portal.</p></header>';
     echo $this->render_profile_image_section($user_id, $user_id);
     echo '</div>';
