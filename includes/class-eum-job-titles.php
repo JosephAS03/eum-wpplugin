@@ -261,6 +261,11 @@ class EUM_Job_Titles {
     $action = sanitize_key((string)$_POST['eum_job_title_action']);
     $post_id = isset($_POST['job_title_id']) ? (int)$_POST['job_title_id'] : 0;
     $allowed_paths = array_values(array_filter(array_map('intval', (array)($_POST['allowed_job_paths'] ?? [])), fn($v) => $v > 0));
+    $allowed_paths_json = json_decode((string)wp_unslash($_POST['allowed_job_paths_json'] ?? ''), true);
+    if (is_array($allowed_paths_json)) {
+      $allowed_paths = array_merge($allowed_paths, array_values(array_filter(array_map('intval', $allowed_paths_json), fn($v) => $v > 0)));
+    }
+    $allowed_paths = array_values(array_unique($allowed_paths));
     $groups = array_values(array_filter(array_map('intval', (array)($_POST['default_groups'] ?? [])), fn($v) => $v > 0));
     $projects = array_values(array_filter(array_map('intval', (array)($_POST['default_projects'] ?? [])), fn($v) => $v > 0));
 
