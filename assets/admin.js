@@ -1242,7 +1242,9 @@
     }
     if (method !== 'POST' || form.enctype === 'text/plain') return;
     var postUrl;
-    try { postUrl = new URL(form.action || window.location.href, window.location.href); } catch (error) { return; }
+    // Read the attribute directly: a hidden input named "action" shadows form.action.
+    var actionUrl = form.getAttribute('action') || window.location.href;
+    try { postUrl = new URL(actionUrl, window.location.href); } catch (error) { return; }
     if (postUrl.origin !== window.location.origin) return;
     event.preventDefault();
     var submitter = event.submitter || null;
