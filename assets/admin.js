@@ -1095,6 +1095,7 @@
   document.addEventListener('submit', function (event) {
     var form = event.target;
     if (!form || !form.matches || !form.matches('form')) return;
+    if (form.closest('[data-eum-ajax-ignore="1"]')) return;
     var region = form.closest('[data-eum-ajax-region]');
     if (!region || form.target && form.target !== '_self') return;
     var method = String(form.method || 'get').toUpperCase();
@@ -1126,6 +1127,7 @@
   document.addEventListener('click', function (event) {
     var link = event.target.closest('a[href]');
     if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (link.closest('[data-eum-ajax-ignore="1"]')) return;
     if (link.target && link.target !== '_self' || link.hasAttribute('download')) return;
     var region = link.closest('[data-eum-ajax-region]');
     if (!region) return;

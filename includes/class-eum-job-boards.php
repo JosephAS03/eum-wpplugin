@@ -619,6 +619,9 @@ class EUM_Job_Boards {
     $buffer_level = ob_get_level();
     try {
     $jobs = $this->visible_jobs_for_actor($user_id);
+    $can_search_other_job_owners = $this->actor_can_search_other_job_postings($user_id);
+    $job_list_filters = $this->job_posting_list_filters($can_search_other_job_owners);
+    $display_jobs = $this->filter_job_posting_list($jobs, $user_id, $can_search_other_job_owners, $job_list_filters);
     $show_historical_candidates = !empty($_GET['eum_candidate_history']);
     $all_candidates = $this->visible_candidates_for_actor($user_id, true);
     $historical_candidates = array_values(array_filter($all_candidates, fn($item) => $this->candidate_is_historical((int)$item->ID)));
@@ -643,8 +646,8 @@ class EUM_Job_Boards {
         : 'margin-bottom:16px;padding:12px 14px;border:1px solid #00a32a;background:#ecf7ed;color:#166534;border-radius:6px;';
       echo '<div style="' . esc_attr($notice_style) . '">' . esc_html($msg) . '</div>';
     }
-    echo '<div class="eum-job-board__grid" style="display:grid;grid-template-columns:minmax(320px,620px) minmax(320px,1fr);gap:24px;align-items:start;">';
-    echo '<div class="eum-job-board-card" style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;">';
+    echo '<div class="eum-job-board__grid">';
+    echo '<div class="eum-job-board-card eum-job-board__editor" data-eum-ajax-ignore="1">';
     echo '<h3 style="margin-top:0;">' . ($editing ? 'Edit Job Posting' : 'Create Job Posting') . '</h3>';
     echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
     echo '<input type="hidden" name="action" value="eum_job_board_save"><input type="hidden" name="return_url" value="' . esc_attr($this->current_url()) . '">';
@@ -721,23 +724,45 @@ class EUM_Job_Boards {
     }
     echo '</div>';
 
-    echo '<div class="eum-job-board-card" style="padding:18px;border:1px solid #ccd0d4;border-radius:8px;background:#fff;"><h3 style="margin-top:0;">My Job Postings</h3>';
-    if (empty($jobs)) echo '<p>No job postings yet.</p>';
-    else {
-      echo '<div style="overflow:auto;"><table class="widefat striped"><thead><tr><th>Title</th><th>Job Title</th><th>Job Path</th><th>Owner</th><th>Creator</th><th>Visibility</th><th>Status</th><th>Active Candidates</th><th>Actions</th></tr></thead><tbody>';
-      foreach ($jobs as $job) {
+    echo '<section class="eum-job-board-card eum-job-board__list" data-eum-ajax-region="job-listings" aria-labelledby="eum-job-listings-title">';
+    echo '<div class="eum-job-board__list-heading"><div><h3 id="eum-job-listings-title">My Job Postings</h3><p>Review listings and open candidate queues.</p></div><span class="eum-job-board__result-count">' . (int)count($display_jobs) . ' ' . (count($display_jobs) === 1 ? 'listing' : 'listings') . '</span></div>';
+    echo $this->render_job_posting_filters($job_list_filters, $can_search_other_job_owners);
+    if (empty($display_jobs)) {
+      echo '<div class="eum-job-listings__empty"><strong>No listings found.</strong><span>Clear the filters or create a listing below.</span></div>';
+    } else {
+      echo '<div class="eum-job-listings">';
+      foreach ($display_jobs as $job) {
         $job_id = (int)$job->ID;
         $job_term_id = (int)get_post_meta($job_id, self::JOB_META_JOB_TERM, true);
+        $job_owner_user_id = $this->job_owner_user_id($job_id);
+        $job_title = (string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true);
+        if ($job_title === '') $job_title = get_the_title($job_id);
+        $job_path = $this->term_full_path('eum_job_path', $job_term_id, ' / ');
+        $status_label = $this->job_status_label((string)get_post_meta($job_id, self::JOB_META_STATUS, true));
+        $visibility = sanitize_key((string)get_post_meta($job_id, self::JOB_META_VISIBILITY, true));
+        if (!in_array($visibility, ['internal', 'external', 'both', 'private'], true)) $visibility = 'both';
         $delete_url = wp_nonce_url(add_query_arg(['action' => 'eum_job_board_delete', 'job_id' => $job_id, 'return_url' => $this->current_url()], admin_url('admin-post.php')), 'eum_job_board_delete_' . $job_id);
         $clone_url = wp_nonce_url(add_query_arg(['action' => 'eum_job_board_clone', 'job_id' => $job_id, 'return_url' => $this->current_url()], admin_url('admin-post.php')), 'eum_job_board_clone_' . $job_id);
-        $job_owner_user_id = (int)get_post_meta($job_id, self::JOB_META_OWNER_UID, true);
-        if ($job_owner_user_id <= 0) $job_owner_user_id = (int)get_post_field('post_author', $job_id);
-        $job_creator_user_id = (int)get_post_field('post_author', $job_id);
-        echo '<tr><td>' . esc_html((string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true)) . '</td><td>' . esc_html(EUM_Profiles::job_title_label_from_value((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true))) . '</td><td>' . esc_html($this->term_full_path('eum_job_path', $job_term_id, ' / ')) . '</td><td>' . esc_html($this->display_user_label($job_owner_user_id)) . '</td><td>' . esc_html($this->display_user_label($job_creator_user_id)) . '</td><td>' . esc_html($this->job_visibility_label((string)get_post_meta($job_id, self::JOB_META_VISIBILITY, true))) . '</td><td>' . esc_html($this->job_status_label((string)get_post_meta($job_id, self::JOB_META_STATUS, true))) . '</td><td>' . (int)$this->candidate_count_for_job($job_id) . '</td><td><a class="button button-small" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job_edit' => $job_id], $this->current_url())) . '">Edit</a> <a class="button button-small" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job' => $job_id], $this->current_url())) . '">View Candidates</a> <a class="button button-small" href="' . esc_url($clone_url) . '">Clone</a> <a class="button button-small" href="' . esc_url($delete_url) . '" onclick="return confirm(&quot;Delete this job posting and all of its candidates? Pending candidate records will also be removed.&quot;);">Delete</a></td></tr>';
+        echo '<article class="eum-job-listing">';
+        echo '<div class="eum-job-listing__top"><div><h4>' . esc_html($job_title) . '</h4>';
+        if ($job_path !== '') echo '<p class="eum-job-listing__path">' . esc_html($job_path) . '</p>';
+        echo '</div><div class="eum-job-listing__badges"><span class="eum-job-listing__badge eum-job-listing__badge--status eum-job-listing__badge--' . esc_attr(sanitize_key($status_label)) . '">' . esc_html($status_label) . '</span>';
+        if (in_array($visibility, ['internal', 'both'], true)) echo '<span class="eum-job-listing__badge">Internal</span>';
+        if (in_array($visibility, ['external', 'both'], true)) echo '<span class="eum-job-listing__badge">External</span>';
+        if ($visibility === 'private') echo '<span class="eum-job-listing__badge eum-job-listing__badge--private">Private</span>';
+        echo '</div></div>';
+        echo '<div class="eum-job-listing__details"><span><strong>Owner</strong> ' . esc_html($this->display_user_label($job_owner_user_id)) . '</span><span><strong>Active candidates</strong> ' . (int)$this->candidate_count_for_job($job_id) . '</span></div>';
+        echo '<nav class="eum-job-listing__actions" data-eum-ajax-ignore="1" aria-label="Actions for ' . esc_attr($job_title) . '">';
+        echo '<a class="button button-primary" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job_edit' => $job_id], $this->current_url())) . '">Edit</a>';
+        echo '<a class="button" href="' . esc_url(add_query_arg(['eum_tab' => 'jobs', 'eum_job' => $job_id], $this->current_url())) . '">Candidates</a>';
+        echo '<a class="button" href="' . esc_url($clone_url) . '">Clone</a>';
+        echo '<a class="button eum-job-listing__delete" href="' . esc_url($delete_url) . '" onclick="return confirm(&quot;Delete this job posting and all of its candidates? Pending candidate records will also be removed.&quot;);">Delete</a>';
+        echo '</nav></article>';
       }
-      echo '</tbody></table></div>';
+      echo '</div>';
     }
-    echo '</div></div>';
+    echo '</section>';
+    echo '</div>';
 
     $history_toggle_url = $show_historical_candidates
       ? remove_query_arg(['eum_candidate_history'], $this->current_url())
@@ -2407,7 +2432,7 @@ class EUM_Job_Boards {
   }
 
   private function visible_jobs_for_actor(int $actor_user_id): array {
-    $items = get_posts(['post_type' => self::CPT_JOB, 'post_status' => 'publish', 'numberposts' => 500, 'orderby' => 'date', 'order' => 'DESC']);
+    $items = get_posts(['post_type' => self::CPT_JOB, 'post_status' => 'publish', 'numberposts' => -1, 'orderby' => 'date', 'order' => 'DESC']);
     if (EUM_Access::is_it_or_hr($actor_user_id)) return $items;
     return array_values(array_filter($items, fn($item) => $this->actor_can_manage_job($actor_user_id, (int)$item->ID)));
   }
@@ -4204,6 +4229,210 @@ class EUM_Job_Boards {
     if ($excerpt === '') $excerpt = trim((string)wp_strip_all_tags((string)($job_view['requirements'] ?? '')));
     if ($excerpt === '') $excerpt = 'No description provided.';
     return wp_trim_words($excerpt, $words, '...');
+  }
+
+  private function actor_can_search_other_job_postings(int $actor_user_id): bool {
+    if ($actor_user_id <= 0) return false;
+    if (EUM_Access::is_it_or_hr($actor_user_id)) return true;
+    if (!EUM_Access::is_manager_user($actor_user_id) || !class_exists('EUM_Manager_IDs')) return false;
+
+    $manager_post_ids = get_posts([
+      'post_type' => EUM_Manager_IDs::CPT,
+      'post_status' => 'publish',
+      'numberposts' => 5000,
+      'fields' => 'ids',
+    ]);
+    $manager_post_ids = array_values(array_filter(array_map('intval', (array)$manager_post_ids)));
+    if (class_exists('EUM_Manager_Messages') && defined('EUM_Manager_Messages::TERM_META_MANAGER_IDS')) {
+      foreach (['eum_user_group', 'eum_project'] as $taxonomy) {
+        if (!taxonomy_exists($taxonomy)) continue;
+        $terms = get_terms(['taxonomy' => $taxonomy, 'hide_empty' => false, 'number' => 0]);
+        if (is_wp_error($terms)) continue;
+        foreach ($terms as $term) {
+          $assigned_manager_ids = (array)get_term_meta((int)$term->term_id, EUM_Manager_Messages::TERM_META_MANAGER_IDS, true);
+          $manager_post_ids = array_merge($manager_post_ids, array_map('intval', $assigned_manager_ids));
+        }
+      }
+    }
+    $manager_post_ids = array_values(array_unique(array_filter($manager_post_ids)));
+    $known_manager_users = [];
+    foreach ($manager_post_ids as $manager_post_id) {
+      $manager_users = (array)get_post_meta($manager_post_id, EUM_Manager_IDs::META_MANAGER_USERS, true);
+      foreach ($manager_users as $manager_user_id) {
+        $manager_user_id = (int)$manager_user_id;
+        if ($manager_user_id > 0) $known_manager_users[$manager_user_id] = true;
+      }
+    }
+
+    $managed_user_ids = EUM_Manager_IDs::managed_user_ids_for_manager_user($actor_user_id, false, true);
+    foreach ($managed_user_ids as $managed_user_id) {
+      if (isset($known_manager_users[(int)$managed_user_id])) return true;
+    }
+    return false;
+  }
+
+  private function job_posting_list_filters(bool $can_search_other_owners): array {
+    $read_text = static function (string $key): string {
+      $value = $_GET[$key] ?? '';
+      if (!is_scalar($value)) return '';
+      return sanitize_text_field(wp_unslash((string)$value));
+    };
+    $filters = [
+      'search' => $read_text('eum_job_search'),
+      'owner' => $can_search_other_owners ? $read_text('eum_job_owner_search') : '',
+      'path' => $can_search_other_owners ? $read_text('eum_job_path_search') : '',
+      'statuses' => [],
+      'visibilities' => [],
+    ];
+
+    $statuses = $_GET['eum_job_status'] ?? [];
+    if (!is_array($statuses)) $statuses = [$statuses];
+    foreach ($statuses as $status) {
+      if (!is_scalar($status)) continue;
+      $status = sanitize_key((string)$status);
+      if (in_array($status, ['draft', 'published'], true)) $filters['statuses'][] = $status;
+    }
+    $filters['statuses'] = array_values(array_unique($filters['statuses']));
+
+    $visibilities = $_GET['eum_job_visibility'] ?? [];
+    if (!is_array($visibilities)) $visibilities = [$visibilities];
+    foreach ($visibilities as $visibility) {
+      if (!is_scalar($visibility)) continue;
+      $visibility = sanitize_key((string)$visibility);
+      if (in_array($visibility, ['internal', 'external'], true)) $filters['visibilities'][] = $visibility;
+    }
+    $filters['visibilities'] = array_values(array_unique($filters['visibilities']));
+
+    return $filters;
+  }
+
+  private function comma_search_tokens(string $value): array {
+    $tokens = preg_split('/[,]+/', $value) ?: [];
+    $tokens = array_map(static function ($token): string {
+      $token = trim((string)$token);
+      return function_exists('mb_strtolower') ? mb_strtolower($token, 'UTF-8') : strtolower($token);
+    }, $tokens);
+    return array_values(array_unique(array_filter($tokens, static fn($token) => $token !== '')));
+  }
+
+  private function search_text_contains(string $haystack, string $needle): bool {
+    if (function_exists('mb_stripos')) return mb_stripos($haystack, $needle, 0, 'UTF-8') !== false;
+    return stripos($haystack, $needle) !== false;
+  }
+
+  private function filter_job_posting_list(array $jobs, int $actor_user_id, bool $can_search_other_owners, array $filters): array {
+    $owner_query = $can_search_other_owners ? trim((string)$filters['owner']) : '';
+    $path_query = $can_search_other_owners ? trim((string)$filters['path']) : '';
+    $owner_tokens = $this->comma_search_tokens($owner_query);
+    $path_tokens = $this->comma_search_tokens($path_query);
+    $owner_all = in_array('all', $owner_tokens, true);
+    $path_all = in_array('all', $path_tokens, true);
+    $owner_tokens = array_values(array_filter($owner_tokens, static fn($token) => $token !== 'all'));
+    $path_tokens = array_values(array_filter($path_tokens, static fn($token) => $token !== 'all'));
+    $use_default_owner = !$owner_tokens && !$path_tokens && !$owner_all && !$path_all;
+    $search = function_exists('mb_strtolower') ? mb_strtolower(trim((string)$filters['search']), 'UTF-8') : strtolower(trim((string)$filters['search']));
+    $statuses = (array)($filters['statuses'] ?? []);
+    $visibilities = (array)($filters['visibilities'] ?? []);
+    $out = [];
+
+    foreach ($jobs as $job) {
+      $job_id = (int)$job->ID;
+      $owner_user_id = $this->job_owner_user_id($job_id);
+      if ($use_default_owner && $owner_user_id !== $actor_user_id) continue;
+
+      if ($owner_tokens && !$owner_all) {
+        $owner = get_user_by('id', $owner_user_id);
+        if (!$owner) continue;
+        $owner_search = implode(' ', [(string)$owner->display_name, (string)$owner->user_login, (string)$owner->user_email]);
+        $owner_search = function_exists('mb_strtolower') ? mb_strtolower($owner_search, 'UTF-8') : strtolower($owner_search);
+        $owner_match = false;
+        foreach ($owner_tokens as $token) {
+          if ($this->search_text_contains($owner_search, $token)) {
+            $owner_match = true;
+            break;
+          }
+        }
+        if (!$owner_match) continue;
+      }
+
+      $job_term_id = (int)get_post_meta($job_id, self::JOB_META_JOB_TERM, true);
+      $job_path = $this->term_full_path('eum_job_path', $job_term_id, ' / ');
+      if ($path_tokens && !$path_all) {
+        $path_search = function_exists('mb_strtolower') ? mb_strtolower($job_path, 'UTF-8') : strtolower($job_path);
+        $path_match = false;
+        foreach ($path_tokens as $token) {
+          if ($this->search_text_contains($path_search, $token)) {
+            $path_match = true;
+            break;
+          }
+        }
+        if (!$path_match) continue;
+      }
+
+      $status = $this->normalize_job_status((string)get_post_meta($job_id, self::JOB_META_STATUS, true));
+      if ($statuses && !in_array($status, $statuses, true)) continue;
+
+      if ($visibilities) {
+        $visibility = sanitize_key((string)get_post_meta($job_id, self::JOB_META_VISIBILITY, true));
+        if (!in_array($visibility, ['internal', 'external', 'both', 'private'], true)) $visibility = 'both';
+        $matches_visibility = ($visibility === 'both' && (in_array('internal', $visibilities, true) || in_array('external', $visibilities, true)))
+          || in_array($visibility, $visibilities, true);
+        if (!$matches_visibility) continue;
+      }
+
+      if ($search !== '') {
+        $title = (string)get_post_meta($job_id, self::JOB_META_NEAT_TITLE, true);
+        if ($title === '') $title = get_the_title($job_id);
+        $job_title = class_exists('EUM_Profiles') ? EUM_Profiles::job_title_label_from_value((string)get_post_meta($job_id, self::JOB_META_JOB_TITLE, true)) : '';
+        $searchable = implode(' ', [$title, $job_title, $job_path]);
+        $searchable = function_exists('mb_strtolower') ? mb_strtolower($searchable, 'UTF-8') : strtolower($searchable);
+        if (!$this->search_text_contains($searchable, $search)) continue;
+      }
+
+      $out[] = $job;
+    }
+    return $out;
+  }
+
+  private function render_job_posting_filters(array $filters, bool $can_search_other_owners): string {
+    $filter_keys = ['eum_job_search', 'eum_job_owner_search', 'eum_job_path_search', 'eum_job_status', 'eum_job_visibility'];
+    $action = remove_query_arg($filter_keys, $this->current_url());
+    $reset_url = remove_query_arg($filter_keys, $this->current_url());
+    ob_start();
+    echo '<form class="eum-job-list-filters" method="get" action="' . esc_url($action) . '">';
+    foreach ($_GET as $key => $value) {
+      if (in_array((string)$key, $filter_keys, true)) continue;
+      if (is_scalar($value)) {
+        echo '<input type="hidden" name="' . esc_attr((string)$key) . '" value="' . esc_attr((string)$value) . '">';
+      } elseif (is_array($value)) {
+        foreach ($value as $item) {
+          if (is_scalar($item)) echo '<input type="hidden" name="' . esc_attr((string)$key) . '[]" value="' . esc_attr((string)$item) . '">';
+        }
+      }
+    }
+
+    echo '<div class="eum-job-list-filters__checks">';
+    echo '<fieldset><legend>Listing status</legend>';
+    foreach (['draft' => 'Draft', 'published' => 'Published'] as $value => $label) {
+      echo '<label class="eum-job-filter-chip"><input type="checkbox" name="eum_job_status[]" value="' . esc_attr($value) . '" ' . checked(in_array($value, (array)$filters['statuses'], true), true, false) . '><span>' . esc_html($label) . '</span></label>';
+    }
+    echo '</fieldset><fieldset><legend>Board</legend>';
+    foreach (['internal' => 'Internal', 'external' => 'External'] as $value => $label) {
+      echo '<label class="eum-job-filter-chip"><input type="checkbox" name="eum_job_visibility[]" value="' . esc_attr($value) . '" ' . checked(in_array($value, (array)$filters['visibilities'], true), true, false) . '><span>' . esc_html($label) . '</span></label>';
+    }
+    echo '</fieldset></div>';
+
+    echo '<div class="eum-job-list-filters__fields">';
+    echo '<label class="eum-job-list-filters__search"><span>Search postings</span><input type="search" name="eum_job_search" value="' . esc_attr((string)$filters['search']) . '" placeholder="Title, job title, or path"></label>';
+    if ($can_search_other_owners) {
+      echo '<label><span>OWNER:</span><input type="search" name="eum_job_owner_search" value="' . esc_attr((string)$filters['owner']) . '" placeholder="Name or email, comma separated, or ALL"></label>';
+      echo '<label><span>JOB PATH:</span><input type="search" name="eum_job_path_search" value="' . esc_attr((string)$filters['path']) . '" placeholder="Path text, comma separated, or ALL"></label>';
+    }
+    echo '</div>';
+    if ($can_search_other_owners) echo '<p class="eum-job-list-filters__hint">Leave OWNER and JOB PATH blank to show your own listings. Use comma-separated values to match any; filters apply together.</p>';
+    echo '<div class="eum-job-list-filters__actions"><button type="submit" class="button button-primary">Apply filters</button><a class="button" href="' . esc_url($reset_url) . '">Clear</a></div>';
+    echo '</form>';
+    return (string)ob_get_clean();
   }
 
   private function public_board_base_url(): string {

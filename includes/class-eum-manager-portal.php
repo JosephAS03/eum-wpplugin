@@ -1447,9 +1447,10 @@ class EUM_Manager_Portal {
 
   private function tab_link(string $tab, string $label, bool $active): string {
     $url = add_query_arg(['eum_tab' => $tab]);
+    $ajax_ignore = $tab === 'jobs' ? ' data-eum-ajax-ignore="1"' : '';
     $style = $active
       ? 'display:inline-block;padding:10px 14px;border:1px solid #1d2327;background:#1d2327;color:#fff;text-decoration:none;border-radius:4px;'
       : 'display:inline-block;padding:10px 14px;border:1px solid #ccd0d4;background:#fff;color:#1d2327;text-decoration:none;border-radius:4px;';
-    return '<a href="'.esc_url($url).'" style="'.$style.'">'.esc_html($label).'</a>';
+    return '<a href="'.esc_url($url).'" style="'.$style.'"'.$ajax_ignore.'>'.esc_html($label).'</a>';
   }
 }
