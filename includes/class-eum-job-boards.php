@@ -957,7 +957,10 @@ class EUM_Job_Boards {
     echo '<input type="hidden" name="invite_code" value="' . esc_attr($code) . '">';
     wp_nonce_field('eum_preaccepted_candidate_signup_' . $candidate_id, 'eum_preaccepted_candidate_signup_nonce');
     echo '<div class="eum-candidate-signup__grid">';
-    foreach ($this->preaccepted_signup_fields() as $field_id) echo '<div>' . EUM_Profiles::render_field_input($field_id, $profile[$field_id] ?? '', 0, 0) . '</div>';
+    $required_signup_fields = $this->preaccepted_required_fields();
+    foreach ($this->preaccepted_signup_fields() as $field_id) {
+      echo '<div>' . EUM_Profiles::render_field_input($field_id, $profile[$field_id] ?? '', 0, 0, in_array($field_id, $required_signup_fields, true)) . '</div>';
+    }
     echo '</div>';
     echo '<script>(function(){var root=document.currentScript&&document.currentScript.closest(".eum-candidate-signup");if(!root)return;var requiredFields=' . wp_json_encode($this->preaccepted_required_fields()) . ';requiredFields.forEach(function(id){var input=root.querySelector(\'[name="eum_pf[\'+id+\']"]\');if(!input)return;input.required=true;var label=input.closest("p")&&input.closest("p").querySelector("label");if(label&&label.textContent.indexOf("*")===-1){label.appendChild(document.createTextNode(" *"));}});}());</script>';
     echo '<div class="eum-candidate-signup__section"><h3 style="margin:0 0 12px;">Account</h3><div class="eum-candidate-signup__grid">';
@@ -1134,7 +1137,7 @@ class EUM_Job_Boards {
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Preferred Name</label><input type="text" name="prefill_preferred_name"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Pronouns</label><input type="text" name="prefill_pronouns"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Date of Birth</label><input type="date" name="prefill_date_of_birth"></p>';
-    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Personal Email</label><input type="email" name="prefill_personal_email"></p>';
+    echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Personal Email (optional)</label><input type="email" name="prefill_personal_email"><span class="description" style="display:block;margin-top:6px;">If blank, the candidate must enter a valid personal email when accepting the invite.</span></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">Phone Number</label><input type="text" name="prefill_mobile_phone"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">City</label><input type="text" name="prefill_residence_city"></p>';
     echo '<p style="margin:0;"><label style="display:block;font-weight:600;margin-bottom:4px;">State</label><input type="text" name="prefill_residence_state"></p>';

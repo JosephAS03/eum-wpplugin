@@ -1949,10 +1949,10 @@ class EUM_Profiles {
     @unlink($path);
   }
 
-  public static function render_field_input(string $field_id, $raw, int $target_user_id = 0, int $actor_user_id = 0): string {
+  public static function render_field_input(string $field_id, $raw, int $target_user_id = 0, int $actor_user_id = 0, bool $required = false): string {
     $catalog = self::field_catalog();
     if (!isset($catalog[$field_id])) return '';
-    return (new self())->render_frontend_input($field_id, $catalog[$field_id], $raw, $target_user_id, $actor_user_id);
+    return (new self())->render_frontend_input($field_id, $catalog[$field_id], $raw, $target_user_id, $actor_user_id, $required);
   }
 
   public static function normalize_field_input(string $field_id, $posted) {
@@ -2187,14 +2187,14 @@ EUMJS;
     return array_values(array_unique(array_filter($expanded, static function($term_id) { return $term_id > 0; })));
   }
 
-  private function render_frontend_input(string $field_id, array $def, $raw, int $target_user_id, int $actor_user_id = 0): string {
+  private function render_frontend_input(string $field_id, array $def, $raw, int $target_user_id, int $actor_user_id = 0, bool $required = false): string {
     $label = (string)($def['label'] ?? $field_id);
     $type = (string)($def['type'] ?? 'text');
     $name = 'eum_pf[' . $field_id . ']';
 
     ob_start();
     echo '<p style="margin-bottom:14px;">';
-    echo '<label style="display:block;font-weight:600;margin-bottom:4px;">' . esc_html($label) . '</label>';
+    echo '<label style="display:block;font-weight:600;margin-bottom:4px;">' . esc_html($label) . ($required ? ' <span aria-hidden="true">*</span>' : '') . '</label>';
 
     if ($type === 'public_meta_override') {
       $state = is_array($raw) ? $raw : ['enabled' => false, 'value' => ''];
@@ -2276,7 +2276,7 @@ EUMJS;
       echo '</select>';
     } else {
       $html_type = in_array($type, ['text', 'email', 'url', 'number', 'date', 'password'], true) ? $type : 'text';
-      echo '<input type="' . esc_attr($html_type) . '" name="' . esc_attr($name) . '" value="' . esc_attr((string)$raw) . '" style="width:100%;max-width:520px;">';
+      echo '<input type="' . esc_attr($html_type) . '" name="' . esc_attr($name) . '" value="' . esc_attr((string)$raw) . '" style="width:100%;max-width:520px;"' . ($required ? ' required' : '') . '>';
     }
 
     echo '</p>';

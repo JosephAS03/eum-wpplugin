@@ -1117,7 +1117,7 @@
     var parsed = parser.parseFromString(html, 'text/html');
     var replacements = keys.map(function (key) { return parsed.querySelector(regionSelector(key)); });
     if (replacements.some(function (replacement) { return !replacement; })) {
-      if (!(options && options.strictTargets)) window.location.assign(responseUrl || window.location.href);
+      if (!(options && options.strictTargets) || (options && options.fallbackOnMissing)) window.location.assign(responseUrl || window.location.href);
       return false;
     }
     var updatedRegions = [];
@@ -1158,14 +1158,18 @@
         var responseDocument = new DOMParser().parseFromString(html, 'text/html');
         var notice = responseDocument.querySelector('[data-eum-job-notice="1"]');
         var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });
-        if (currentRegions.some(function (region) { return !region; })) return false;
+        if (currentRegions.some(function (region) { return !region; })) {
+          if (options && options.isPost) window.location.assign(response.url || url);
+          return false;
+        }
         var replaced = replaceAjaxRegions(currentRegions, keys, html, response.url || url, {
           pushState: !(options && options.popstate),
-          strictTargets: !!(options && options.strictTargets)
+          strictTargets: !!(options && options.strictTargets),
+          fallbackOnMissing: !!(options && options.isPost)
         });
         if (replaced && notice) showAjaxStatus(notice.textContent.trim(), notice.getAttribute('data-eum-notice-type') === 'error');
         else if (replaced) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
-        else showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
+        else if (!(options && options.isPost)) showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
         return replaced;
       });
     }).catch(function () {
