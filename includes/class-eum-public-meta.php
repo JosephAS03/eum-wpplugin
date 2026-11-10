@@ -481,10 +481,6 @@ class EUM_Public_Meta {
     exit;
   }
 
-  public function admin_menu(): void {
-    add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Public Metadata Rules', 'Public Metadata Rules', 'read', 'eum-public-meta', [$this, 'render_rules_page']);
-  }
-
   private function schedule_rebuild(): int {
     $user_ids = get_users(['fields' => 'ids', 'number' => -1]);
     if (empty($user_ids)) return 0;
