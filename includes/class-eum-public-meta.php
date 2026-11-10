@@ -305,6 +305,15 @@ class EUM_Public_Meta {
   }
 
   private static function condition_value_for_user(int $user_id, string $meta_key) {
+    $normalized_key = strtolower($meta_key);
+    if ($normalized_key === 'eum_terminated' && class_exists('EUM_Personnel')) {
+      // Active users may not have a termination meta row at all. Treat the
+      // absent value as the same false/0 state used by the rules UI.
+      return EUM_Personnel::is_terminated($user_id) ? '1' : '0';
+    }
+    if ($normalized_key === 'eum_rehirable' && class_exists('EUM_Personnel')) {
+      return EUM_Personnel::is_rehirable($user_id) ? '1' : '0';
+    }
     if (strtolower($meta_key) === 'eum_job_title:id') {
       $custom = class_exists('EUM_Fields') ? (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true) : [];
       return (string)($custom['job_title'] ?? '');
@@ -558,15 +567,21 @@ class EUM_Public_Meta {
       $rules[] = $new_rule;
     }
     update_option(self::RULES_OPTION, array_values($rules), false);
-    $queued = $this->schedule_rebuild();
-    $this->redirect_with_notice(sprintf('Saved %d rule(s). Bulk update and connected-site sync queued for %d user(s).', count($rules), $queued));
+    $result = $this->schedule_rebuild();
+    $message = $result['queued']
+      ? sprintf('Saved %d rule(s). Bulk update and connected-site sync queued for %d user(s).', count($rules), $result['count'])
+      : sprintf('Saved %d rule(s). Public metadata applied to %d user(s); connected-site sync queued.', count($rules), $result['count']);
+    $this->redirect_with_notice($message);
   }
 
   public function handle_bulk_sync(): void {
     if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
     if (!isset($_POST['eum_public_meta_bulk_sync_nonce']) || !wp_verify_nonce((string)wp_unslash($_POST['eum_public_meta_bulk_sync_nonce']), 'eum_public_meta_bulk_sync')) wp_die('Security check failed.');
-    $queued = $this->schedule_rebuild();
-    $this->redirect_with_notice(sprintf('Bulk public metadata update and connected-site sync queued for %d user(s).', $queued));
+    $result = $this->schedule_rebuild();
+    $message = $result['queued']
+      ? sprintf('Bulk public metadata update and connected-site sync queued for %d user(s).', $result['count'])
+      : sprintf('Public metadata applied to %d user(s); connected-site sync queued.', $result['count']);
+    $this->redirect_with_notice($message);
   }
 
   public function handle_rule_bulk_sync(): void {
@@ -577,8 +592,11 @@ class EUM_Public_Meta {
     if ($rule_id === '') $this->redirect_with_notice('Select a saved rule to sync.', 'error');
     foreach (self::conditional_rules() as $rule) {
       if (!hash_equals((string)($rule['id'] ?? ''), $rule_id)) continue;
-      $queued = $this->schedule_rebuild($rule);
-      $this->redirect_with_notice(sprintf('Bulk update and connected-site sync for this rule queued for %d matching user(s).', $queued));
+      $result = $this->schedule_rebuild($rule);
+      $message = $result['queued']
+        ? sprintf('Rule update and connected-site sync queued for %d matching user(s).', $result['count'])
+        : sprintf('Rule applied to %d matching user(s); connected-site sync queued.', $result['count']);
+      $this->redirect_with_notice($message);
     }
     $this->redirect_with_notice('The selected rule was not found. Save the rules and try again.', 'error');
   }
@@ -592,16 +610,23 @@ class EUM_Public_Meta {
     exit;
   }
 
-  private function schedule_rebuild(?array $rule = null): int {
+  private function schedule_rebuild(?array $rule = null): array {
     $user_ids = get_users(['fields' => 'ids', 'number' => -1]);
-    if (empty($user_ids)) return 0;
+    if (empty($user_ids)) return ['count' => 0, 'queued' => false];
     if ($rule !== null) {
       $conditions = is_array($rule['conditions'] ?? null) ? $rule['conditions'] : [];
       $user_ids = array_values(array_filter(array_map('intval', $user_ids), static function($user_id) use ($conditions) {
         return self::conditions_match_user($user_id, $conditions);
       }));
     }
-    if (empty($user_ids)) return 0;
+    if (empty($user_ids)) return ['count' => 0, 'queued' => false];
+    $user_ids = array_values(array_unique(array_map('intval', $user_ids)));
+    // Small rule and site-wide updates should not depend on a later WP-Cron
+    // request to actually apply the metadata. Large updates remain batched.
+    if (count($user_ids) <= 100) {
+      $this->process_rebuild_batch($user_ids);
+      return ['count' => count($user_ids), 'queued' => false];
+    }
     $chunks = array_chunk(array_map('intval', $user_ids), 100);
     $start = time() + 10;
     foreach ($chunks as $index => $batch) {
@@ -610,7 +635,7 @@ class EUM_Public_Meta {
         wp_schedule_single_event($start + ($index * 10), self::REBUILD_HOOK, $args);
       }
     }
-    return count($user_ids);
+    return ['count' => count($user_ids), 'queued' => true];
   }
 
   public function process_rebuild_batch($user_ids): void {
