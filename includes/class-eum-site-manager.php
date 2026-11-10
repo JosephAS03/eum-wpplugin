@@ -551,6 +551,10 @@ class EUM_Site_Manager {
     $this->queue_user_sync_batch([$user_id]);
   }
 
+  public static function queue_user_sync_for_user(int $user_id, $old_user_data = null): void {
+    (new self())->queue_user_sync($user_id, $old_user_data);
+  }
+
   private function queue_user_sync_batch(array $user_ids): void {
     $user_ids = array_values(array_unique(array_filter(array_map('intval', $user_ids), static function ($id) { return $id > 0; })));
     if (empty($user_ids)) return;

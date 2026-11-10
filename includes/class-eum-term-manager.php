@@ -476,7 +476,7 @@ class EUM_Term_Manager {
       if ($tax === 'eum_user_group' && class_exists('EUM_Public_Meta')) {
         foreach (array_unique(array_map('intval', (array)$affected_group_users)) as $user_id) {
           EUM_Public_Meta::sync_user($user_id);
-          if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+          if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync_for_user($user_id);
         }
       }
       $message = 'Term deleted.';

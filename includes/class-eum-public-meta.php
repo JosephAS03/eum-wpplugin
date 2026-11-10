@@ -237,7 +237,7 @@ class EUM_Public_Meta {
     } finally {
       unset(self::$syncing_users[$user_id]);
     }
-    if ($changed && class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+    if ($changed && class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync_for_user($user_id);
     return $changed;
   }
 
@@ -432,8 +432,8 @@ class EUM_Public_Meta {
     $assignments = class_exists('EUM_Assignments') ? new EUM_Assignments() : null;
     foreach (array_unique(array_map('intval', (array)$user_ids)) as $user_id) {
       if ($assignments && method_exists($assignments, 'sync_user')) $assignments->sync_user($user_id);
-      self::sync_user($user_id);
-      if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+      $changed = self::sync_user($user_id);
+      if (!$changed && class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync_for_user($user_id);
     }
     return count(array_unique(array_map('intval', (array)$user_ids)));
   }
@@ -640,8 +640,8 @@ class EUM_Public_Meta {
 
   public function process_rebuild_batch($user_ids): void {
     foreach (array_values(array_unique(array_map('intval', (array)$user_ids))) as $user_id) {
-      self::sync_user($user_id);
-      if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+      $changed = self::sync_user($user_id);
+      if (!$changed && class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync_for_user($user_id);
     }
   }
 }
