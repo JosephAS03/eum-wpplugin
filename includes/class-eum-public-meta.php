@@ -27,8 +27,11 @@ class EUM_Public_Meta {
     add_action('init', [$this, 'maybe_migrate_profile_fields'], 30);
     add_action('show_user_profile', [$this, 'render_user_settings_metadata']);
     add_action('edit_user_profile', [$this, 'render_user_settings_metadata']);
+    add_action('personal_options_update', [$this, 'save_user_settings_metadata']);
+    add_action('edit_user_profile_update', [$this, 'save_user_settings_metadata']);
     add_action('admin_post_eum_public_meta_save_rules', [$this, 'handle_rules_save']);
     add_action('admin_post_eum_public_meta_bulk_sync', [$this, 'handle_bulk_sync']);
+    add_action('admin_post_eum_public_meta_bulk_sync_rule', [$this, 'handle_rule_bulk_sync']);
     add_action('added_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('updated_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('deleted_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
@@ -146,16 +149,30 @@ class EUM_Public_Meta {
     $values = self::values_for_user($user_id);
 
     echo '<h2>Public Metadata</h2>';
+    echo '<p>Check a field to set a user-specific value. Unchecked fields continue to follow matching rules. User-specific values take priority over rules; Group labels are still added to Public Labels. A checked blank value clears its base value; Group labels remain additive.</p>';
+    wp_nonce_field('eum_public_meta_profile_' . $user_id, 'eum_public_meta_profile_nonce');
     echo '<table class="form-table" role="presentation"><tbody>';
     foreach (self::fields() as $key => $field) {
-      $value = (string)($values[$key] ?? '');
+      $override = self::profile_override_state($user_id, $key);
+      $value = $override['enabled'] ? $override['value'] : (string)($values[$key] ?? '');
       echo '<tr><th><label for="eum_public_meta_' . esc_attr($key) . '">' . esc_html((string)$field['label']) . '</label></th><td>';
-      echo '<input type="text" readonly class="regular-text" id="eum_public_meta_' . esc_attr($key) . '" value="' . esc_attr($value) . '">';
-      if ($value === '') echo '<p class="description">No public value is currently set.</p>';
+      echo '<label><input type="checkbox" name="eum_public_meta[' . esc_attr($key) . '][enabled]" value="1" ' . checked($override['enabled'], true, false) . '> Set a user-specific value</label><br>';
+      echo '<input type="text" class="regular-text" maxlength="250" name="eum_public_meta[' . esc_attr($key) . '][value]" id="eum_public_meta_' . esc_attr($key) . '" value="' . esc_attr($value) . '">';
+      if ($key === 'public_labels') echo '<p class="description">Comma-separated. Labels from assigned Groups are added automatically.</p>';
       echo '</td></tr>';
     }
     echo '</tbody></table>';
-    echo '<p class="description">These are the values currently sent to connected sites. Manage their rules under Workforce → Public Metadata Rules.</p>';
+  }
+
+  public function save_user_settings_metadata(int $user_id): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id()) || !current_user_can('edit_user', $user_id)) return;
+    $nonce = isset($_POST['eum_public_meta_profile_nonce']) ? (string)wp_unslash($_POST['eum_public_meta_profile_nonce']) : '';
+    if (!wp_verify_nonce($nonce, 'eum_public_meta_profile_' . $user_id)) return;
+    $posted = isset($_POST['eum_public_meta']) && is_array($_POST['eum_public_meta']) ? wp_unslash($_POST['eum_public_meta']) : [];
+    foreach (array_keys(self::fields()) as $key) {
+      self::save_profile_override($user_id, $key, is_array($posted[$key] ?? null) ? $posted[$key] : []);
+    }
+    self::sync_user($user_id);
   }
 
   public static function sync_user(int $user_id): bool {
@@ -165,6 +182,10 @@ class EUM_Public_Meta {
     $changed = false;
     try {
       $values = self::matching_rule_values($user_id);
+      $overrides = (array)get_user_meta($user_id, self::USER_OVERRIDES_META, true);
+      foreach (self::fields() as $key => $_field) {
+        if (array_key_exists($key, $overrides)) $values[$key] = self::sanitize_value($key, $overrides[$key]);
+      }
       $has_label_rule = array_key_exists('public_labels', $values);
       if ($has_label_rule) {
         $base_labels = self::sanitize_value('public_labels', $values['public_labels']);
@@ -222,7 +243,7 @@ class EUM_Public_Meta {
 
   public function maybe_sync_user_from_meta($meta_ids, $user_id, $meta_key, $meta_value): void {
     $meta_key = sanitize_key((string)$meta_key);
-    if (self::is_public_meta_key($meta_key) || $meta_key === self::CLEARED_FIELDS_META || $meta_key === self::LABELS_BASE_META) return;
+    if (self::is_public_meta_key($meta_key) || in_array($meta_key, [self::USER_OVERRIDES_META, self::CLEARED_FIELDS_META, self::LABELS_BASE_META], true)) return;
     self::sync_user((int)$user_id);
   }
 
@@ -422,11 +443,14 @@ class EUM_Public_Meta {
       $type = sanitize_key((string)wp_unslash($_GET['eum_public_meta_type'] ?? 'success'));
       echo '<div class="notice ' . ($type === 'error' ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($message) . '</p></div>';
     }
-    echo '<p>Create rules such as <code>custom:worker_type = contractor</code> and <code>eum_terminated = 0</code>. All conditions in one rule must match. For each public field, the most recently edited matching rule wins. Unchecked fields stay unchanged; check a field with a blank value to clear it.</p>';
+    echo '<p>Create rules such as <code>custom:worker_type = contractor</code> and <code>eum_terminated = 0</code>. All conditions in one rule must match. For each public field, the most recently edited matching rule wins. User-specific values set on the backend user profile take priority. Unchecked fields stay unchanged; check a field with a blank value to clear it.</p>';
     echo '<p>Condition keys can be WordPress user-meta keys, EUM custom fields, or taxonomies. Match a job title by ID with <code>eum_job_title:ID = 382</code> or <code>custom:job_title = 382</code> (the <code>eum_job_title:382</code> token also works). Match a Job Path with <code>taxonomy:eum_job_path</code> and a term ID or full path such as <code>JAS Enterprises / Xander Brand Digital</code>. Add another condition to require both. Dot notation works for nested user meta such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and removed when the user leaves those Groups.</p>';
+    echo '<p>Use <strong>Bulk Sync This Rule</strong> on a saved rule to queue only its matching users; the normal rule priority is still applied for each user. This uses the saved rule, so save edits first. The button below the rules syncs all users.</p>';
     echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-public-meta-rules="1">';
     echo '<input type="hidden" name="action" value="eum_public_meta_save_rules">';
     wp_nonce_field('eum_public_meta_save_rules', 'eum_public_meta_nonce');
+    wp_nonce_field('eum_public_meta_bulk_sync_rule', 'eum_public_meta_bulk_sync_rule_nonce');
+    echo '<input type="hidden" name="rule_id" value="" data-eum-public-meta-sync-rule-id>';
     echo '<div data-eum-public-meta-rule-list data-eum-next-index="' . (int)$next_index . '" style="display:grid;gap:14px;">';
     if (empty($rules)) echo self::render_rule_row(0, []);
     else foreach ($rules as $index => $rule) echo self::render_rule_row((string)$index, $rule);
@@ -438,13 +462,14 @@ class EUM_Public_Meta {
     echo '<input type="hidden" name="action" value="eum_public_meta_bulk_sync">';
     wp_nonce_field('eum_public_meta_bulk_sync', 'eum_public_meta_bulk_sync_nonce');
     echo '<p><button type="submit" class="button">Bulk Sync Public Metadata to Connected Sites</button> <span class="description">Reapply saved rules to every user and queue connected-site syncs in background batches.</span></p></form>';
-    echo '<script>(function(){var root=document.querySelector("[data-eum-public-meta-rules]");if(!root)return;var list=root.querySelector("[data-eum-public-meta-rule-list]"),template=root.querySelector("template[data-eum-public-meta-rule-template]");root.addEventListener("click",function(event){var add=event.target.closest("[data-eum-public-meta-add-rule]");if(add){event.preventDefault();var index=parseInt(list.getAttribute("data-eum-next-index")||"0",10)||0;list.setAttribute("data-eum-next-index",String(index+1));list.insertAdjacentHTML("beforeend",template.innerHTML.replace(/__INDEX__/g,String(index)));return;}var addCondition=event.target.closest("[data-eum-public-meta-add-condition]");if(addCondition){event.preventDefault();var row=addCondition.closest("[data-eum-public-meta-rule]"),conditions=row&&row.querySelector("[data-eum-public-meta-conditions]");if(!conditions)return;var conditionIndex=parseInt(row.getAttribute("data-eum-next-condition-index")||"0",10)||0;row.setAttribute("data-eum-next-condition-index",String(conditionIndex+1));var conditionTemplate=row.querySelector("template[data-eum-public-meta-condition-template]");if(conditionTemplate)conditions.insertAdjacentHTML("beforeend",conditionTemplate.innerHTML.replace(/__COND_INDEX__/g,String(conditionIndex)));return;}var removeCondition=event.target.closest("[data-eum-public-meta-remove-condition]");if(removeCondition){event.preventDefault();var condition=removeCondition.closest("[data-eum-public-meta-condition]");if(condition)condition.remove();return;}var removeRule=event.target.closest("[data-eum-public-meta-remove-rule]");if(removeRule){event.preventDefault();var rule=removeRule.closest("[data-eum-public-meta-rule]");if(rule)rule.remove();}});}());</script></div>';
+    echo '<script>(function(){var root=document.querySelector("[data-eum-public-meta-rules]");if(!root)return;var list=root.querySelector("[data-eum-public-meta-rule-list]"),template=root.querySelector("template[data-eum-public-meta-rule-template]");root.addEventListener("click",function(event){var syncRule=event.target.closest("[data-eum-public-meta-sync-rule]");if(syncRule){event.preventDefault();var action=root.querySelector("input[name=action]"),ruleId=root.querySelector("[data-eum-public-meta-sync-rule-id]");if(action&&ruleId){action.value="eum_public_meta_bulk_sync_rule";ruleId.value=syncRule.getAttribute("data-rule-id")||"";root.submit();}return;}var add=event.target.closest("[data-eum-public-meta-add-rule]");if(add){event.preventDefault();var index=parseInt(list.getAttribute("data-eum-next-index")||"0",10)||0;list.setAttribute("data-eum-next-index",String(index+1));list.insertAdjacentHTML("beforeend",template.innerHTML.replace(/__INDEX__/g,String(index)));return;}var addCondition=event.target.closest("[data-eum-public-meta-add-condition]");if(addCondition){event.preventDefault();var row=addCondition.closest("[data-eum-public-meta-rule]"),conditions=row&&row.querySelector("[data-eum-public-meta-conditions]");if(!conditions)return;var conditionIndex=parseInt(row.getAttribute("data-eum-next-condition-index")||"0",10)||0;row.setAttribute("data-eum-next-condition-index",String(conditionIndex+1));var conditionTemplate=row.querySelector("template[data-eum-public-meta-condition-template]");if(conditionTemplate)conditions.insertAdjacentHTML("beforeend",conditionTemplate.innerHTML.replace(/__COND_INDEX__/g,String(conditionIndex)));return;}var removeCondition=event.target.closest("[data-eum-public-meta-remove-condition]");if(removeCondition){event.preventDefault();var condition=removeCondition.closest("[data-eum-public-meta-condition]");if(condition)condition.remove();return;}var removeRule=event.target.closest("[data-eum-public-meta-remove-rule]");if(removeRule){event.preventDefault();var rule=removeRule.closest("[data-eum-public-meta-rule]");if(rule)rule.remove();}});}());</script></div>';
   }
 
   private static function render_rule_row($index, array $rule): string {
     $conditions = is_array($rule['conditions'] ?? null) ? array_values($rule['conditions']) : [];
     if (empty($conditions)) $conditions = [[]];
     $metadata = is_array($rule['metadata'] ?? null) ? $rule['metadata'] : [];
+    $rule_id = sanitize_text_field((string)($rule['id'] ?? ''));
     ob_start();
     echo '<section data-eum-public-meta-rule data-eum-next-condition-index="' . (int)count($conditions) . '" style="padding:16px;border:1px solid #c3c4c7;border-radius:6px;background:#fff;">';
     echo '<input type="hidden" name="rules[' . esc_attr((string)$index) . '][id]" value="' . esc_attr((string)($rule['id'] ?? '')) . '">';
@@ -466,7 +491,9 @@ class EUM_Public_Meta {
       if ($key === 'public_labels') echo '<span class="description">Comma-separated. Group labels are added separately.</span>';
       echo '</div>';
     }
-    echo '</div><p style="margin:14px 0 0;"><button type="button" class="button-link-delete" data-eum-public-meta-remove-rule>Remove Rule</button></p></section>';
+    echo '</div><p style="margin:14px 0 0;"><button type="button" class="button-link-delete" data-eum-public-meta-remove-rule>Remove Rule</button>';
+    if ($rule_id !== '') echo ' <button type="button" class="button" data-eum-public-meta-sync-rule data-rule-id="' . esc_attr($rule_id) . '">Bulk Sync This Rule</button>';
+    echo '</p></section>';
     return ob_get_clean();
   }
 
@@ -542,6 +569,20 @@ class EUM_Public_Meta {
     $this->redirect_with_notice(sprintf('Bulk public metadata update and connected-site sync queued for %d user(s).', $queued));
   }
 
+  public function handle_rule_bulk_sync(): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
+    $nonce = isset($_POST['eum_public_meta_bulk_sync_rule_nonce']) ? (string)wp_unslash($_POST['eum_public_meta_bulk_sync_rule_nonce']) : '';
+    if (!wp_verify_nonce($nonce, 'eum_public_meta_bulk_sync_rule')) wp_die('Security check failed.');
+    $rule_id = sanitize_text_field((string)wp_unslash($_POST['rule_id'] ?? ''));
+    if ($rule_id === '') $this->redirect_with_notice('Select a saved rule to sync.', 'error');
+    foreach (self::conditional_rules() as $rule) {
+      if (!hash_equals((string)($rule['id'] ?? ''), $rule_id)) continue;
+      $queued = $this->schedule_rebuild($rule);
+      $this->redirect_with_notice(sprintf('Bulk update and connected-site sync for this rule queued for %d matching user(s).', $queued));
+    }
+    $this->redirect_with_notice('The selected rule was not found. Save the rules and try again.', 'error');
+  }
+
   private function redirect_with_notice(string $message, string $type = 'success'): void {
     wp_safe_redirect(add_query_arg([
       'page' => 'eum-public-meta',
@@ -551,8 +592,15 @@ class EUM_Public_Meta {
     exit;
   }
 
-  private function schedule_rebuild(): int {
+  private function schedule_rebuild(?array $rule = null): int {
     $user_ids = get_users(['fields' => 'ids', 'number' => -1]);
+    if (empty($user_ids)) return 0;
+    if ($rule !== null) {
+      $conditions = is_array($rule['conditions'] ?? null) ? $rule['conditions'] : [];
+      $user_ids = array_values(array_filter(array_map('intval', $user_ids), static function($user_id) use ($conditions) {
+        return self::conditions_match_user($user_id, $conditions);
+      }));
+    }
     if (empty($user_ids)) return 0;
     $chunks = array_chunk(array_map('intval', $user_ids), 100);
     $start = time() + 10;
