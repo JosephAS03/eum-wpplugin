@@ -25,6 +25,8 @@ class EUM_Public_Meta {
   public function init(): void {
     add_action('admin_menu', [$this, 'admin_menu'], 55);
     add_action('init', [$this, 'maybe_migrate_profile_fields'], 30);
+    add_action('show_user_profile', [$this, 'render_user_settings_metadata']);
+    add_action('edit_user_profile', [$this, 'render_user_settings_metadata']);
     add_action('admin_post_eum_public_meta_save_rules', [$this, 'handle_rules_save']);
     add_action('admin_post_eum_public_meta_bulk_sync', [$this, 'handle_bulk_sync']);
     add_action('added_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
@@ -137,6 +139,25 @@ class EUM_Public_Meta {
     return $values;
   }
 
+  public function render_user_settings_metadata($user): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) return;
+    $user_id = isset($user->ID) ? (int)$user->ID : 0;
+    if ($user_id <= 0) return;
+    $values = self::values_for_user($user_id);
+
+    echo '<h2>Public Metadata</h2>';
+    echo '<table class="form-table" role="presentation"><tbody>';
+    foreach (self::fields() as $key => $field) {
+      $value = (string)($values[$key] ?? '');
+      echo '<tr><th><label for="eum_public_meta_' . esc_attr($key) . '">' . esc_html((string)$field['label']) . '</label></th><td>';
+      echo '<input type="text" readonly class="regular-text" id="eum_public_meta_' . esc_attr($key) . '" value="' . esc_attr($value) . '">';
+      if ($value === '') echo '<p class="description">No public value is currently set.</p>';
+      echo '</td></tr>';
+    }
+    echo '</tbody></table>';
+    echo '<p class="description">These are the values currently sent to connected sites. Manage their rules under Workforce → Public Metadata Rules.</p>';
+  }
+
   public static function sync_user(int $user_id): bool {
     $user_id = (int)$user_id;
     if ($user_id <= 0 || !get_user_by('id', $user_id) || !empty(self::$syncing_users[$user_id])) return false;
@@ -245,6 +266,11 @@ class EUM_Public_Meta {
 
   private static function condition_values_match(string $key, $actual, string $expected): bool {
     if (!is_scalar($actual)) return false;
+    if (strtolower($key) === 'eum_job_title:id' && class_exists('EUM_Job_Titles')) {
+      $actual_id = EUM_Job_Titles::id_from_token($actual);
+      $expected_id = EUM_Job_Titles::id_from_token($expected);
+      return $actual_id > 0 && $expected_id > 0 && $actual_id === $expected_id;
+    }
     if ($key === 'custom:job_title' && class_exists('EUM_Job_Titles')) {
       $actual_id = EUM_Job_Titles::id_from_token($actual);
       $expected_id = EUM_Job_Titles::id_from_token($expected);
@@ -258,6 +284,10 @@ class EUM_Public_Meta {
   }
 
   private static function condition_value_for_user(int $user_id, string $meta_key) {
+    if (strtolower($meta_key) === 'eum_job_title:id') {
+      $custom = class_exists('EUM_Fields') ? (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true) : [];
+      return (string)($custom['job_title'] ?? '');
+    }
     if (str_starts_with($meta_key, 'taxonomy:')) {
       return self::taxonomy_condition_values_for_user($user_id, sanitize_key(substr($meta_key, 9)));
     }
@@ -393,7 +423,7 @@ class EUM_Public_Meta {
       echo '<div class="notice ' . ($type === 'error' ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($message) . '</p></div>';
     }
     echo '<p>Create rules such as <code>custom:worker_type = contractor</code> and <code>eum_terminated = 0</code>. All conditions in one rule must match. For each public field, the most recently edited matching rule wins. Unchecked fields stay unchanged; check a field with a blank value to clear it.</p>';
-    echo '<p>Condition keys can be WordPress user-meta keys, EUM custom fields, or taxonomies. Use <code>custom:job_title</code> with a Job Title ID (or <code>eum_job_title:ID</code> token), and <code>taxonomy:eum_job_path</code> with a Job Path term ID or full path such as <code>JAS Enterprises / Xander Brand Digital</code>. Add another condition to require both. Dot notation works for nested user meta such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and removed when the user leaves those Groups.</p>';
+    echo '<p>Condition keys can be WordPress user-meta keys, EUM custom fields, or taxonomies. Match a job title by ID with <code>eum_job_title:ID = 382</code> or <code>custom:job_title = 382</code> (the <code>eum_job_title:382</code> token also works). Match a Job Path with <code>taxonomy:eum_job_path</code> and a term ID or full path such as <code>JAS Enterprises / Xander Brand Digital</code>. Add another condition to require both. Dot notation works for nested user meta such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and removed when the user leaves those Groups.</p>';
     echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-public-meta-rules="1">';
     echo '<input type="hidden" name="action" value="eum_public_meta_save_rules">';
     wp_nonce_field('eum_public_meta_save_rules', 'eum_public_meta_nonce');
@@ -445,7 +475,7 @@ class EUM_Public_Meta {
     $value = (string)($condition['value'] ?? '');
     ob_start();
     echo '<div data-eum-public-meta-condition style="display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto;gap:8px;align-items:end;">';
-    echo '<label>Condition Key<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][meta_key]" value="' . esc_attr($key) . '" class="regular-text" placeholder="eum_terminated or taxonomy:eum_job_path"></label>';
+    echo '<label>Condition Key<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][meta_key]" value="' . esc_attr($key) . '" class="regular-text" placeholder="eum_terminated, eum_job_title:ID, or taxonomy:eum_job_path"></label>';
     echo '<label>Equals<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][value]" value="' . esc_attr($value) . '" class="regular-text"></label>';
     echo '<button type="button" class="button" data-eum-public-meta-remove-condition>Remove condition</button></div>';
     return ob_get_clean();
