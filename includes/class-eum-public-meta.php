@@ -206,7 +206,7 @@ class EUM_Public_Meta {
   }
 
   public function maybe_sync_user_from_terms($object_id, $terms, $term_taxonomy_ids, $taxonomy, $append, $old_term_taxonomy_ids): void {
-    if (sanitize_key((string)$taxonomy) === 'eum_user_group' && get_user_by('id', (int)$object_id)) self::sync_user((int)$object_id);
+    if (in_array(sanitize_key((string)$taxonomy), ['eum_user_group', 'eum_job_path'], true) && get_user_by('id', (int)$object_id)) self::sync_user((int)$object_id);
   }
 
   private static function conditional_rules(): array {
@@ -230,20 +230,37 @@ class EUM_Public_Meta {
         $matched = array_key_exists($expected, $actual) && !empty($actual[$expected]);
         if (!$matched) {
           foreach ($actual as $item) {
-            if (is_scalar($item) && (string)$item === $expected) { $matched = true; break; }
+            if (self::condition_values_match($key, $item, $expected)) { $matched = true; break; }
           }
         }
         if (!$matched) return false;
       } elseif ($actual === null || $actual === '') {
         if ($expected !== '') return false;
-      } elseif (!is_scalar($actual) || (string)$actual !== $expected) {
+      } elseif (!self::condition_values_match($key, $actual, $expected)) {
         return false;
       }
     }
     return true;
   }
 
+  private static function condition_values_match(string $key, $actual, string $expected): bool {
+    if (!is_scalar($actual)) return false;
+    if ($key === 'custom:job_title' && class_exists('EUM_Job_Titles')) {
+      $actual_id = EUM_Job_Titles::id_from_token($actual);
+      $expected_id = EUM_Job_Titles::id_from_token($expected);
+      if ($actual_id > 0 && $expected_id > 0) return $actual_id === $expected_id;
+      if ($actual_id > 0 && $expected_id <= 0) {
+        $actual_label = EUM_Job_Titles::title_label($actual_id);
+        if ($actual_label !== '' && strcasecmp($actual_label, trim($expected)) === 0) return true;
+      }
+    }
+    return (string)$actual === $expected;
+  }
+
   private static function condition_value_for_user(int $user_id, string $meta_key) {
+    if (str_starts_with($meta_key, 'taxonomy:')) {
+      return self::taxonomy_condition_values_for_user($user_id, sanitize_key(substr($meta_key, 9)));
+    }
     if (str_starts_with($meta_key, 'custom:') && class_exists('EUM_Fields')) {
       $custom_key = sanitize_key(substr($meta_key, 7));
       $custom = (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true);
@@ -260,6 +277,29 @@ class EUM_Public_Meta {
       return $value;
     }
     return get_user_meta($user_id, $meta_key, true);
+  }
+
+  private static function taxonomy_condition_values_for_user(int $user_id, string $taxonomy): array {
+    if ($user_id <= 0 || $taxonomy === '' || !taxonomy_exists($taxonomy)) return [];
+    $term_ids = wp_get_object_terms($user_id, $taxonomy, ['fields' => 'ids']);
+    if (is_wp_error($term_ids) || empty($term_ids)) return [];
+    $values = [];
+    foreach (array_unique(array_map('intval', (array)$term_ids)) as $term_id) {
+      if ($term_id <= 0) continue;
+      $values[] = (string)$term_id;
+      $path_ids = is_taxonomy_hierarchical($taxonomy)
+        ? array_reverse(array_map('intval', (array)get_ancestors($term_id, $taxonomy)))
+        : [];
+      $path_ids[] = $term_id;
+      $path_names = [];
+      foreach ($path_ids as $path_id) {
+        $term = get_term($path_id, $taxonomy);
+        if (!$term || is_wp_error($term)) continue;
+        $path_names[] = sanitize_text_field((string)$term->name);
+      }
+      if (!empty($path_names)) $values[] = implode(' / ', $path_names);
+    }
+    return array_values(array_unique($values));
   }
 
   private static function matching_rule_values(int $user_id): array {
@@ -353,7 +393,7 @@ class EUM_Public_Meta {
       echo '<div class="notice ' . ($type === 'error' ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($message) . '</p></div>';
     }
     echo '<p>Create rules such as <code>custom:worker_type = contractor</code> and <code>eum_terminated = 0</code>. All conditions in one rule must match. For each public field, the most recently edited matching rule wins. Unchecked fields stay unchanged; check a field with a blank value to clear it.</p>';
-    echo '<p>Condition keys are WordPress user-meta keys. Use <code>custom:field_key</code> for an EUM custom profile field, or dot notation for a nested meta value such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and are removed when the user leaves those Groups.</p>';
+    echo '<p>Condition keys can be WordPress user-meta keys, EUM custom fields, or taxonomies. Use <code>custom:job_title</code> with a Job Title ID (or <code>eum_job_title:ID</code> token), and <code>taxonomy:eum_job_path</code> with a Job Path term ID or full path such as <code>JAS Enterprises / Xander Brand Digital</code>. Add another condition to require both. Dot notation works for nested user meta such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and removed when the user leaves those Groups.</p>';
     echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-public-meta-rules="1">';
     echo '<input type="hidden" name="action" value="eum_public_meta_save_rules">';
     wp_nonce_field('eum_public_meta_save_rules', 'eum_public_meta_nonce');
@@ -405,7 +445,7 @@ class EUM_Public_Meta {
     $value = (string)($condition['value'] ?? '');
     ob_start();
     echo '<div data-eum-public-meta-condition style="display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto;gap:8px;align-items:end;">';
-    echo '<label>User Meta Key<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][meta_key]" value="' . esc_attr($key) . '" class="regular-text" placeholder="eum_terminated"></label>';
+    echo '<label>Condition Key<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][meta_key]" value="' . esc_attr($key) . '" class="regular-text" placeholder="eum_terminated or taxonomy:eum_job_path"></label>';
     echo '<label>Equals<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][value]" value="' . esc_attr($value) . '" class="regular-text"></label>';
     echo '<button type="button" class="button" data-eum-public-meta-remove-condition>Remove condition</button></div>';
     return ob_get_clean();
