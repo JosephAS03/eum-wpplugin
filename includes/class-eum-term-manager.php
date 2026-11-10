@@ -230,6 +230,8 @@ class EUM_Term_Manager {
       $all_groups_filtered = array_values(array_filter($all_groups, fn($g) => (int)$g->term_id !== (int)$term_id));
       echo '<p><label><strong>Included User Groups</strong></label><br>' . $this->multi_select('eum_included_groups[]', $all_groups_filtered, $sel_includes) . '<br><span class="description">Assigning this group also assigns included groups recursively.</span></p>';
       echo '<p><label><strong>Default Projects</strong></label><br>' . $this->multi_select('eum_group_default_projects[]', $all_projects, $sel_projects) . '<br><span class="description">Assigning this group also adds these projects.</span></p>';
+      $public_labels = $term_id > 0 ? (string)get_term_meta($term_id, EUM_Public_Meta::GROUP_LABELS_TERM_META, true) : '';
+      echo '<p><label><strong>Add Public Labels</strong></label><br><input type="text" class="regular-text" name="eum_public_group_labels" value="' . esc_attr($public_labels) . '" placeholder="Recruiting, Leadership"><br><span class="description">Added to members’ public_labels while they belong to this group; removed when they leave. Comma-separated, and additive to rule-defined labels.</span></p>';
       $this->render_term_manager_ids_select($tax, $term_id);
       return;
     }
@@ -461,31 +463,23 @@ class EUM_Term_Manager {
       if (is_wp_error($updated)) $this->redirect_with_msg($tax, $updated->get_error_message(), 'error');
       $this->save_term_meta($tax, $term_id);
       $message = 'Term updated.';
-      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
-        $count = EUM_Public_Meta::sync_users_for_job_path($term_id);
-        $message .= ' Public metadata refreshed for ' . (int)$count . ' assigned user(s); connected-site sync is queued.';
-      }
       $this->redirect_with_msg($tax, $message);
     }
 
     if ($action === 'delete') {
       $term_id = isset($_POST['term_id']) ? intval($_POST['term_id']) : 0;
       if ($term_id <= 0) $this->redirect_with_msg($tax, 'Missing term id.', 'error');
-      $affected_users = [];
-      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
-        $affected_terms = [$term_id];
-        $descendants = get_term_children($term_id, 'eum_job_path');
-        if (!is_wp_error($descendants) && is_array($descendants)) $affected_terms = array_merge($affected_terms, array_map('intval', $descendants));
-        $affected_users = get_objects_in_term($affected_terms, 'eum_job_path');
-        if (is_wp_error($affected_users)) $affected_users = [];
-      }
+      $affected_group_users = $tax === 'eum_user_group' ? get_objects_in_term($term_id, 'eum_user_group') : [];
+      if (is_wp_error($affected_group_users)) $affected_group_users = [];
       $deleted = wp_delete_term($term_id, $tax);
       if (is_wp_error($deleted)) $this->redirect_with_msg($tax, $deleted->get_error_message(), 'error');
-      $message = 'Term deleted.';
-      if ($tax === 'eum_job_path' && class_exists('EUM_Public_Meta')) {
-        foreach (array_unique(array_map('intval', (array)$affected_users)) as $user_id) EUM_Public_Meta::sync_user($user_id);
-        $message .= ' Public metadata refreshed for ' . (int)count((array)$affected_users) . ' affected user(s); connected-site sync is queued.';
+      if ($tax === 'eum_user_group' && class_exists('EUM_Public_Meta')) {
+        foreach (array_unique(array_map('intval', (array)$affected_group_users)) as $user_id) {
+          EUM_Public_Meta::sync_user($user_id);
+          if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+        }
       }
+      $message = 'Term deleted.';
       $this->redirect_with_msg($tax, $message);
     }
 
@@ -509,6 +503,7 @@ class EUM_Term_Manager {
       $sync_users = !empty($_POST['eum_bulk_sync_users']);
 
       if ($key === '') $this->redirect_with_msg($tax, 'Please enter a field or meta key for the bulk update.', 'error');
+      if (class_exists('EUM_Public_Meta') && EUM_Public_Meta::is_public_meta_key($key)) $this->redirect_with_msg($tax, 'Public metadata is managed from Public Metadata Rules.', 'error');
       if ($mode === 'add_update' && $value === '') $this->redirect_with_msg($tax, 'Please enter a value for the bulk update.', 'error');
 
       $updated_count = 0;
@@ -521,12 +516,10 @@ class EUM_Term_Manager {
         if ($inherit_mode === 'enable') update_term_meta($term_id, EUM_Taxonomies::term_meta_inherit_key(), 1);
         elseif ($inherit_mode === 'disable') update_term_meta($term_id, EUM_Taxonomies::term_meta_inherit_key(), 0);
         $updated_count++;
-        if (class_exists('EUM_Public_Meta')) $synced_count += EUM_Public_Meta::sync_users_for_job_path($term_id);
         if ($sync_users) $synced_count += EUM_Taxonomies::sync_users_for_term('eum_job_path', $term_id, $actor_user_id, 'Job Path Bulk Data Update');
       }
 
       $message = 'Updated ' . $updated_count . ' job path(s).';
-      $message .= ' Refreshed public metadata for ' . (int)$synced_count . ' user assignment(s).';
       if ($sync_users) $message .= ' Other path-derived data was synced too.';
       $this->redirect_with_msg($tax, $message);
     }
@@ -599,7 +592,13 @@ class EUM_Term_Manager {
       $projects = array_values(array_filter(array_map('intval', (array)($_POST['eum_group_default_projects'] ?? [])), fn($x) => $x > 0));
       update_term_meta($term_id, EUM_Assignments::TM_GROUP_INCLUDED_GROUPS, $includes);
       update_term_meta($term_id, EUM_Assignments::TM_GROUP_DEFAULT_PROJECTS, $projects);
+      $public_labels = class_exists('EUM_Public_Meta')
+        ? EUM_Public_Meta::sanitize_value('public_labels', wp_unslash((string)($_POST['eum_public_group_labels'] ?? '')))
+        : sanitize_text_field((string)($_POST['eum_public_group_labels'] ?? ''));
+      if ($public_labels !== '') update_term_meta($term_id, EUM_Public_Meta::GROUP_LABELS_TERM_META, $public_labels);
+      else delete_term_meta($term_id, EUM_Public_Meta::GROUP_LABELS_TERM_META);
       $this->save_term_manager_ids($tax, $term_id);
+      if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::sync_users_for_group($term_id);
       return;
     }
 

@@ -258,7 +258,7 @@ class EUM_Taxonomies {
   }
 
   public static function mapping_rows_from_raw($raw): array {
-    $parsed = self::parse_term_meta_mapping($raw);
+    $parsed = self::filter_reserved_mapping_keys(self::parse_term_meta_mapping($raw));
     $rows = [];
     foreach ($parsed as $key => $value) {
       $rows[] = [
@@ -274,7 +274,7 @@ class EUM_Taxonomies {
     $lines = [];
     foreach ($rows as $row) {
       $key = self::normalize_mapping_key((string)($row['key'] ?? ''));
-      if ($key === '') continue;
+      if ($key === '' || self::is_reserved_mapping_key($key)) continue;
       $value = is_scalar($row['value'] ?? null) ? trim((string)$row['value']) : wp_json_encode($row['value']);
       $lines[] = $key . '=' . $value;
     }
@@ -289,7 +289,7 @@ class EUM_Taxonomies {
     for ($i = 0; $i < $count; $i++) {
       $key = self::normalize_mapping_key((string)($keys[$i] ?? ''));
       $value = trim((string)($values[$i] ?? ''));
-      if ($key === '') continue;
+      if ($key === '' || self::is_reserved_mapping_key($key)) continue;
       $rows[] = ['key' => $key, 'value' => $value];
     }
     return $rows;
@@ -356,13 +356,19 @@ class EUM_Taxonomies {
     return ['custom:job_title'];
   }
 
+  private static function is_reserved_mapping_key(string $key): bool {
+    $key = self::normalize_mapping_key($key);
+    return $key === ''
+      || in_array($key, self::mapping_keys_reserved_for_explicit_selection(), true)
+      || (class_exists('EUM_Public_Meta') && EUM_Public_Meta::is_public_meta_key($key));
+  }
+
   private static function filter_reserved_mapping_keys(array $mapping): array {
     if (empty($mapping)) return [];
-    $reserved = array_fill_keys(self::mapping_keys_reserved_for_explicit_selection(), true);
     $clean = [];
     foreach ($mapping as $raw_key => $value) {
       $normalized = self::normalize_mapping_key((string)$raw_key);
-      if ($normalized === '' || isset($reserved[$normalized])) continue;
+      if (self::is_reserved_mapping_key($normalized)) continue;
       $clean[$normalized] = $value;
     }
     return $clean;
@@ -376,10 +382,6 @@ class EUM_Taxonomies {
       ['key' => 'user_email', 'label' => 'Work Email'],
       ['key' => 'eum_manager_user_id', 'label' => 'Manager User ID'],
       ['key' => 'job_company', 'label' => 'Company Division'],
-      ['key' => 'public_nickname', 'label' => 'Public Nickname'],
-      ['key' => 'public_jobtitle', 'label' => 'Public Job Title'],
-      ['key' => 'public_division', 'label' => 'Public Division'],
-      ['key' => 'public_labels', 'label' => 'Public Labels (comma separated)'],
     ];
 
     $reserved = array_fill_keys(self::mapping_keys_reserved_for_explicit_selection(), true);

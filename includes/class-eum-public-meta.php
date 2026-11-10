@@ -2,25 +2,31 @@
 if (!defined('ABSPATH')) exit;
 
 class EUM_Public_Meta {
+  const RULES_OPTION = 'eum_public_meta_conditional_rules';
   const STATUS_RULES_OPTION = 'eum_public_meta_activation_rules';
   const USER_OVERRIDES_META = '_eum_public_meta_overrides';
   const JOB_TITLE_META = '_eum_public_meta_values';
-  const PROFILE_MIGRATION_OPTION = 'eum_public_meta_profile_fields_migrated';
+  const CLEARED_FIELDS_META = '_eum_public_meta_cleared_fields';
+  const LABELS_BASE_META = '_eum_public_meta_labels_base';
+  const GROUP_LABELS_TERM_META = '_eum_public_meta_add_labels';
+  const PROFILE_MIGRATION_OPTION = 'eum_public_meta_rule_suite_migrated';
   const REBUILD_HOOK = 'eum_public_meta_rebuild_batch';
+  private static $syncing_users = [];
 
   private static function fields(): array {
     return [
-      'public_nickname' => ['label' => 'Public Nickname', 'profile_label' => 'Public Nickname', 'help' => 'Leave inherited to use the Job Path, Job Title, or activation status value.'],
-      'public_jobtitle' => ['label' => 'Public Job Title', 'profile_label' => 'Public Job Title', 'help' => 'Leave inherited to use the Job Path, Job Title, or activation status value.'],
-      'public_division' => ['label' => 'Public Division', 'profile_label' => 'Public Division', 'help' => 'Leave inherited to use the Job Path, Job Title, or activation status value.'],
-      'public_labels' => ['label' => 'Public Labels', 'profile_label' => 'Public Labels', 'help' => 'Enter labels separated by commas. Leave inherited to use the Job Path, Job Title, or activation status value.'],
+      'public_nickname' => ['label' => 'Public Nickname'],
+      'public_jobtitle' => ['label' => 'Public Job Title'],
+      'public_division' => ['label' => 'Public Division'],
+      'public_labels' => ['label' => 'Public Labels'],
     ];
   }
 
   public function init(): void {
     add_action('admin_menu', [$this, 'admin_menu'], 55);
     add_action('init', [$this, 'maybe_migrate_profile_fields'], 30);
-    add_action('admin_post_eum_public_meta_save_activation_rules', [$this, 'handle_activation_rules_save']);
+    add_action('admin_post_eum_public_meta_save_rules', [$this, 'handle_rules_save']);
+    add_action('admin_post_eum_public_meta_bulk_sync', [$this, 'handle_bulk_sync']);
     add_action('added_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('updated_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('deleted_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
@@ -30,30 +36,39 @@ class EUM_Public_Meta {
 
   public function maybe_migrate_profile_fields(): void {
     if (get_option(self::PROFILE_MIGRATION_OPTION)) return;
-    if (!class_exists('EUM_Profiles')) return;
-    $settings = EUM_Profiles::get_settings();
-    $field_ids = array_keys(self::profile_field_definitions());
-    $key = 'manager_edit_fields';
-    $current = array_values(array_filter(array_map('strval', (array)($settings[$key] ?? []))));
-    foreach ($field_ids as $field_id) {
-      if (!in_array($field_id, $current, true)) $current[] = $field_id;
+    if (class_exists('EUM_Profiles')) {
+      $settings = get_option(EUM_Profiles::OPTION_SETTINGS, []);
+      if (is_array($settings)) {
+        foreach (['public_fields', 'self_edit_fields', 'manager_edit_fields', 'manager_edit_fields_without_approval'] as $key) {
+          $settings[$key] = array_values(array_filter((array)($settings[$key] ?? []), static function($field_id) {
+            return !str_starts_with((string)$field_id, 'public:');
+          }));
+        }
+        update_option(EUM_Profiles::OPTION_SETTINGS, $settings, false);
+      }
     }
-    $settings[$key] = $current;
-    update_option(EUM_Profiles::OPTION_SETTINGS, $settings, false);
+
+    // These legacy sources no longer drive public metadata. Preserve the
+    // resolved public_* user values; remove only their old rule definitions.
+    delete_option(self::STATUS_RULES_OPTION);
+    if (function_exists('delete_metadata')) {
+      delete_metadata('user', 0, self::USER_OVERRIDES_META, '', true);
+      delete_metadata('post', 0, self::JOB_TITLE_META, '', true);
+    }
+    if (class_exists('EUM_Taxonomies') && taxonomy_exists('eum_job_path')) {
+      $term_ids = get_terms(['taxonomy' => 'eum_job_path', 'hide_empty' => false, 'fields' => 'ids', 'number' => -1]);
+      if (!is_wp_error($term_ids)) {
+        foreach ((array)$term_ids as $term_id) {
+          $rows = EUM_Taxonomies::mapping_rows_from_raw(EUM_Taxonomies::term_meta_mapping_raw((int)$term_id));
+          update_term_meta((int)$term_id, EUM_Taxonomies::term_meta_mapping_key(), EUM_Taxonomies::mapping_rows_to_raw($rows));
+        }
+      }
+    }
     update_option(self::PROFILE_MIGRATION_OPTION, 1, false);
   }
 
   public static function profile_field_definitions(): array {
-    $out = [];
-    foreach (self::fields() as $key => $field) {
-      $out['public:' . $key] = [
-        'label' => (string)$field['profile_label'],
-        'group' => 'Public Metadata',
-        'type' => 'public_meta_override',
-        'meta_key' => $key,
-      ];
-    }
-    return $out;
+    return [];
   }
 
   public static function is_public_meta_key(string $key): bool {
@@ -111,225 +126,368 @@ class EUM_Public_Meta {
   public static function values_for_user(int $user_id): array {
     $values = [];
     foreach (self::fields() as $key => $_field) {
-      $values[$key] = self::sanitize_value($key, get_user_meta($user_id, $key, true));
+      if (metadata_exists('user', $user_id, $key)) {
+        $value = self::sanitize_value($key, get_user_meta($user_id, $key, true));
+        if ($value !== '') $values[$key] = $value;
+      }
+    }
+    foreach (self::cleared_fields_for_user($user_id) as $key) {
+      $values[$key] = '';
     }
     return $values;
   }
 
-  public static function sync_user(int $user_id): void {
+  public static function sync_user(int $user_id): bool {
     $user_id = (int)$user_id;
-    if ($user_id <= 0 || !get_user_by('id', $user_id)) return;
-
-    // More specific sources replace broader defaults: user, activation status,
-    // Job Title, then the nearest Job Path rule inherited from its ancestors.
-    $values = array_merge(
-      self::job_path_values_for_user($user_id),
-      self::job_title_values_for_user($user_id),
-      self::activation_values_for_user($user_id),
-      self::individual_values_for_user($user_id)
-    );
-
-    foreach (self::fields() as $key => $_field) {
-      $value = array_key_exists($key, $values) ? self::sanitize_value($key, $values[$key]) : '';
-      $current = self::sanitize_value($key, get_user_meta($user_id, $key, true));
-      if ($value === '') {
-        if (metadata_exists('user', $user_id, $key)) delete_user_meta($user_id, $key);
-      } elseif ($current !== $value) {
-        update_user_meta($user_id, $key, $value);
+    if ($user_id <= 0 || !get_user_by('id', $user_id) || !empty(self::$syncing_users[$user_id])) return false;
+    self::$syncing_users[$user_id] = true;
+    $changed = false;
+    try {
+      $values = self::matching_rule_values($user_id);
+      $has_label_rule = array_key_exists('public_labels', $values);
+      if ($has_label_rule) {
+        $base_labels = self::sanitize_value('public_labels', $values['public_labels']);
+        if (!metadata_exists('user', $user_id, self::LABELS_BASE_META)
+          || self::sanitize_value('public_labels', get_user_meta($user_id, self::LABELS_BASE_META, true)) !== $base_labels) {
+          update_user_meta($user_id, self::LABELS_BASE_META, $base_labels);
+        }
+        unset($values['public_labels']);
+      } elseif (!metadata_exists('user', $user_id, self::LABELS_BASE_META)
+        && metadata_exists('user', $user_id, 'public_labels')) {
+        update_user_meta($user_id, self::LABELS_BASE_META, self::sanitize_value('public_labels', get_user_meta($user_id, 'public_labels', true)));
       }
-    }
-  }
 
-  public static function sync_users_for_job_path(int $term_id): int {
-    $term_id = (int)$term_id;
-    if ($term_id <= 0 || !taxonomy_exists('eum_job_path')) return 0;
-    $term_ids = [$term_id];
-    $descendants = get_term_children($term_id, 'eum_job_path');
-    if (!is_wp_error($descendants) && is_array($descendants)) $term_ids = array_merge($term_ids, array_map('intval', $descendants));
-    $user_ids = get_objects_in_term($term_ids, 'eum_job_path');
-    if (is_wp_error($user_ids)) return 0;
-    $user_ids = array_values(array_unique(array_map('intval', (array)$user_ids)));
-    foreach ($user_ids as $user_id) {
-      self::sync_user($user_id);
-      if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
-    }
-    return count($user_ids);
-  }
+      $has_label_basis = $has_label_rule
+        || metadata_exists('user', $user_id, self::LABELS_BASE_META)
+        || metadata_exists('user', $user_id, 'public_labels')
+        || !empty(self::group_labels_for_user($user_id))
+        || in_array('public_labels', self::cleared_fields_for_user($user_id), true);
+      if ($has_label_basis) {
+        $base_labels = self::sanitize_value('public_labels', get_user_meta($user_id, self::LABELS_BASE_META, true));
+        $group_labels = implode(', ', self::group_labels_for_user($user_id));
+        $values['public_labels'] = self::merge_labels($base_labels, $group_labels);
+      }
 
-  public static function sync_users_for_job_title(int $title_id, array $path_ids = []): int {
-    $title_id = (int)$title_id;
-    if ($title_id <= 0 || !class_exists('EUM_Job_Titles')) return 0;
-    if (empty($path_ids)) $path_ids = EUM_Job_Titles::allowed_job_paths($title_id);
-    $term_ids = [];
-    foreach (array_unique(array_map('intval', $path_ids)) as $path_id) {
-      if ($path_id <= 0) continue;
-      $term_ids[] = $path_id;
-      $descendants = get_term_children($path_id, 'eum_job_path');
-      if (!is_wp_error($descendants) && is_array($descendants)) $term_ids = array_merge($term_ids, array_map('intval', $descendants));
+      foreach ($values as $key => $raw_value) {
+        $value = self::sanitize_value($key, $raw_value);
+        $exists = metadata_exists('user', $user_id, $key);
+        $current = $exists ? self::sanitize_value($key, get_user_meta($user_id, $key, true)) : '';
+        if ($value === '') {
+          $cleared = self::cleared_fields_for_user($user_id);
+          if (!in_array($key, $cleared, true)) {
+            $cleared[] = $key;
+            self::set_cleared_fields($user_id, $cleared);
+            $changed = true;
+          }
+          if ($exists) {
+            delete_user_meta($user_id, $key);
+            $changed = true;
+          }
+        } else {
+          if (!$exists || $current !== $value) {
+            update_user_meta($user_id, $key, $value);
+            $changed = true;
+          }
+          $cleared = array_values(array_diff(self::cleared_fields_for_user($user_id), [$key]));
+          if (self::set_cleared_fields($user_id, $cleared)) $changed = true;
+        }
+      }
+    } finally {
+      unset(self::$syncing_users[$user_id]);
     }
-    if (empty($term_ids)) return 0;
-    $user_ids = get_objects_in_term(array_values(array_unique($term_ids)), 'eum_job_path');
-    if (is_wp_error($user_ids)) return 0;
-    $count = 0;
-    foreach (array_unique(array_map('intval', (array)$user_ids)) as $user_id) {
-      $custom = class_exists('EUM_Fields') ? (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true) : [];
-      if (class_exists('EUM_Job_Titles') && EUM_Job_Titles::id_from_token((string)($custom['job_title'] ?? '')) !== $title_id) continue;
-      self::sync_user($user_id);
-      $count++;
-    }
-    return $count;
+    if ($changed && class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+    return $changed;
   }
 
   public function maybe_sync_user_from_meta($meta_ids, $user_id, $meta_key, $meta_value): void {
-    $watched = [self::USER_OVERRIDES_META, 'eum_terminated'];
-    if (class_exists('EUM_Fields')) $watched[] = EUM_Fields::USER_META_KEY;
-    if (in_array(sanitize_key((string)$meta_key), $watched, true)) self::sync_user((int)$user_id);
+    $meta_key = sanitize_key((string)$meta_key);
+    if (self::is_public_meta_key($meta_key) || $meta_key === self::CLEARED_FIELDS_META || $meta_key === self::LABELS_BASE_META) return;
+    self::sync_user((int)$user_id);
   }
 
   public function maybe_sync_user_from_terms($object_id, $terms, $term_taxonomy_ids, $taxonomy, $append, $old_term_taxonomy_ids): void {
-    if (sanitize_key((string)$taxonomy) === 'eum_job_path' && get_user_by('id', (int)$object_id)) self::sync_user((int)$object_id);
+    if (sanitize_key((string)$taxonomy) === 'eum_user_group' && get_user_by('id', (int)$object_id)) self::sync_user((int)$object_id);
   }
 
-  private static function job_path_values_for_user(int $user_id): array {
-    if (!taxonomy_exists('eum_job_path')) return [];
-    $assigned = wp_get_object_terms($user_id, 'eum_job_path', ['fields' => 'ids']);
-    if (is_wp_error($assigned) || empty($assigned)) return [];
-    $term_id = (int)$assigned[0];
-    return self::public_values_from_map(self::effective_job_path_mapping($term_id));
+  private static function conditional_rules(): array {
+    $saved = get_option(self::RULES_OPTION, []);
+    return is_array($saved) ? array_values(array_filter($saved, 'is_array')) : [];
   }
 
-  private static function effective_job_path_mapping(int $term_id): array {
-    $term = get_term($term_id, 'eum_job_path');
-    if (!$term || is_wp_error($term)) return [];
-    $mapping = [];
-    if ((int)$term->parent > 0 && class_exists('EUM_Taxonomies') && EUM_Taxonomies::term_inherits_parent($term_id)) {
-      $mapping = self::effective_job_path_mapping((int)$term->parent);
+  private static function sanitize_condition_key(string $key): string {
+    $key = trim(sanitize_text_field($key));
+    return preg_replace('/[^a-zA-Z0-9_:.\-]/', '', $key) ?: '';
+  }
+
+  private static function conditions_match_user(int $user_id, array $conditions): bool {
+    if (empty($conditions)) return false;
+    foreach ($conditions as $condition) {
+      $key = self::sanitize_condition_key((string)($condition['meta_key'] ?? ''));
+      if ($key === '') return false;
+      $expected = (string)($condition['value'] ?? '');
+      $actual = self::condition_value_for_user($user_id, $key);
+      if (is_array($actual)) {
+        $matched = array_key_exists($expected, $actual) && !empty($actual[$expected]);
+        if (!$matched) {
+          foreach ($actual as $item) {
+            if (is_scalar($item) && (string)$item === $expected) { $matched = true; break; }
+          }
+        }
+        if (!$matched) return false;
+      } elseif ($actual === null || $actual === '') {
+        if ($expected !== '') return false;
+      } elseif (!is_scalar($actual) || (string)$actual !== $expected) {
+        return false;
+      }
     }
-    if (!class_exists('EUM_Taxonomies')) return $mapping;
-    $direct = EUM_Taxonomies::parse_term_meta_mapping(EUM_Taxonomies::term_meta_mapping_raw($term_id));
-    foreach (array_keys(self::fields()) as $key) {
-      if (array_key_exists($key, $direct)) $mapping[$key] = self::sanitize_value($key, $direct[$key]);
+    return true;
+  }
+
+  private static function condition_value_for_user(int $user_id, string $meta_key) {
+    if (str_starts_with($meta_key, 'custom:') && class_exists('EUM_Fields')) {
+      $custom_key = sanitize_key(substr($meta_key, 7));
+      $custom = (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true);
+      return array_key_exists($custom_key, $custom) ? $custom[$custom_key] : null;
     }
-    return $mapping;
-  }
-
-  private static function job_title_values_for_user(int $user_id): array {
-    if (!class_exists('EUM_Fields') || !class_exists('EUM_Job_Titles')) return [];
-    $custom = (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true);
-    $title_id = EUM_Job_Titles::id_from_token((string)($custom['job_title'] ?? ''));
-    if ($title_id <= 0 || get_post_type($title_id) !== EUM_Job_Titles::CPT) return [];
-    $values = get_post_meta($title_id, self::JOB_TITLE_META, true);
-    return self::public_values_from_map(is_array($values) ? $values : []);
-  }
-
-  private static function activation_values_for_user(int $user_id): array {
-    $status = class_exists('EUM_Personnel') && EUM_Personnel::is_terminated($user_id) ? 'terminated' : 'active';
-    $rules = self::activation_rules();
-    return self::public_values_from_map((array)($rules[$status] ?? []));
-  }
-
-  private static function individual_values_for_user(int $user_id): array {
-    $overrides = get_user_meta($user_id, self::USER_OVERRIDES_META, true);
-    return self::public_values_from_map(is_array($overrides) ? $overrides : []);
-  }
-
-  private static function public_values_from_map(array $values): array {
-    $out = [];
-    foreach (array_keys(self::fields()) as $key) {
-      if (array_key_exists($key, $values)) $out[$key] = self::sanitize_value($key, $values[$key]);
+    if (strpos($meta_key, '.') !== false) {
+      $segments = explode('.', $meta_key);
+      $root_key = sanitize_key((string)array_shift($segments));
+      $value = get_user_meta($user_id, $root_key, true);
+      foreach ($segments as $segment) {
+        if (!is_array($value) || !array_key_exists($segment, $value)) return null;
+        $value = $value[$segment];
+      }
+      return $value;
     }
-    return $out;
+    return get_user_meta($user_id, $meta_key, true);
   }
 
-  private static function activation_rules(): array {
-    $saved = get_option(self::STATUS_RULES_OPTION, []);
-    $saved = is_array($saved) ? $saved : [];
-    $out = [];
-    foreach (['active', 'terminated'] as $status) {
-      $out[$status] = self::public_values_from_map(is_array($saved[$status] ?? null) ? $saved[$status] : []);
+  private static function matching_rule_values(int $user_id): array {
+    $values = [];
+    $timestamps = [];
+    foreach (self::conditional_rules() as $rule) {
+      $conditions = is_array($rule['conditions'] ?? null) ? $rule['conditions'] : [];
+      $metadata = is_array($rule['metadata'] ?? null) ? $rule['metadata'] : [];
+      if (!self::conditions_match_user($user_id, $conditions)) continue;
+      $updated_at = (float)($rule['updated_at'] ?? 0);
+      foreach ($metadata as $key => $value) {
+        $key = sanitize_key((string)$key);
+        if (!self::is_public_meta_key($key)) continue;
+        if (!array_key_exists($key, $timestamps) || $updated_at >= $timestamps[$key]) {
+          $values[$key] = is_scalar($value) ? (string)$value : '';
+          $timestamps[$key] = $updated_at;
+        }
+      }
     }
-    return $out;
+    return $values;
   }
 
-  public static function render_job_title_fields(int $title_id): void {
-    $values = $title_id > 0 ? get_post_meta($title_id, self::JOB_TITLE_META, true) : [];
-    $values = self::public_values_from_map(is_array($values) ? $values : []);
-    echo '<hr><h3>Connected Site Public Metadata</h3><p class="description">These values apply to users assigned this Job Title and override Job Path defaults. Activation-status and individual-user values take precedence.</p>';
-    foreach (self::fields() as $key => $field) {
-      $enabled = array_key_exists($key, $values);
-      echo '<p><label><input type="checkbox" name="eum_public_meta_title_enabled[' . esc_attr($key) . ']" value="1" ' . checked($enabled, true, false) . '> <strong>' . esc_html((string)$field['label']) . '</strong></label><br>';
-      echo '<input type="text" class="regular-text" name="eum_public_meta_title_values[' . esc_attr($key) . ']" value="' . esc_attr((string)($values[$key] ?? '')) . '" style="max-width:520px;width:100%;">';
-      if ($key === 'public_labels') echo '<br><span class="description">Comma-separated labels.</span>';
-      echo '</p>';
-    }
+  private static function cleared_fields_for_user(int $user_id): array {
+    $saved = get_user_meta($user_id, self::CLEARED_FIELDS_META, true);
+    return array_values(array_intersect(array_keys(self::fields()), array_map('sanitize_key', (array)$saved)));
   }
 
-  public static function save_job_title_fields(int $title_id, array $post): void {
-    $enabled = is_array($post['eum_public_meta_title_enabled'] ?? null) ? $post['eum_public_meta_title_enabled'] : [];
-    $values = is_array($post['eum_public_meta_title_values'] ?? null) ? $post['eum_public_meta_title_values'] : [];
-    $clean = [];
-    foreach (array_keys(self::fields()) as $key) {
-      if (empty($enabled[$key])) continue;
-      $raw = $values[$key] ?? '';
-      if (is_string($raw)) $raw = wp_unslash($raw);
-      $clean[$key] = self::sanitize_value($key, $raw);
+  private static function set_cleared_fields(int $user_id, array $fields): bool {
+    $fields = array_values(array_intersect(array_keys(self::fields()), array_unique(array_map('sanitize_key', $fields))));
+    $current = self::cleared_fields_for_user($user_id);
+    sort($fields);
+    sort($current);
+    if ($fields === $current) return false;
+    if (empty($fields)) delete_user_meta($user_id, self::CLEARED_FIELDS_META);
+    else update_user_meta($user_id, self::CLEARED_FIELDS_META, $fields);
+    return true;
+  }
+
+  private static function group_labels_for_user(int $user_id): array {
+    if (!taxonomy_exists('eum_user_group')) return [];
+    $group_ids = wp_get_object_terms($user_id, 'eum_user_group', ['fields' => 'ids']);
+    if (is_wp_error($group_ids) || empty($group_ids)) return [];
+    $labels = [];
+    foreach (array_unique(array_map('intval', (array)$group_ids)) as $group_id) {
+      $raw = (string)get_term_meta($group_id, self::GROUP_LABELS_TERM_META, true);
+      foreach (explode(',', $raw) as $label) {
+        $label = trim(sanitize_text_field($label));
+        if ($label !== '') $labels[] = $label;
+      }
     }
-    if (empty($clean)) delete_post_meta($title_id, self::JOB_TITLE_META);
-    else update_post_meta($title_id, self::JOB_TITLE_META, $clean);
+    return array_values(array_unique($labels));
+  }
+
+  private static function merge_labels(string ...$sources): string {
+    $labels = [];
+    foreach ($sources as $source) {
+      foreach (explode(',', $source) as $label) {
+        $label = trim(sanitize_text_field($label));
+        if ($label !== '') $labels[] = $label;
+      }
+    }
+    return self::sanitize_value('public_labels', implode(', ', array_values(array_unique($labels))));
+  }
+
+  public static function sync_users_for_group(int $group_id): int {
+    $group_id = (int)$group_id;
+    if ($group_id <= 0 || !taxonomy_exists('eum_user_group')) return 0;
+    $user_ids = get_objects_in_term($group_id, 'eum_user_group');
+    if (is_wp_error($user_ids)) return 0;
+    $assignments = class_exists('EUM_Assignments') ? new EUM_Assignments() : null;
+    foreach (array_unique(array_map('intval', (array)$user_ids)) as $user_id) {
+      if ($assignments && method_exists($assignments, 'sync_user')) $assignments->sync_user($user_id);
+      self::sync_user($user_id);
+      if (class_exists('EUM_Site_Manager')) EUM_Site_Manager::queue_user_sync($user_id);
+    }
+    return count(array_unique(array_map('intval', (array)$user_ids)));
   }
 
   public function admin_menu(): void {
-    add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Public Metadata Rules', 'Public Metadata Rules', 'read', 'eum-public-meta', [$this, 'render_activation_rules_page']);
+    add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Public Metadata Rules', 'Public Metadata Rules', 'read', 'eum-public-meta', [$this, 'render_rules_page']);
   }
 
-  public function render_activation_rules_page(): void {
+  public function render_rules_page(): void {
     if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
-    $rules = self::activation_rules();
+    $rules = self::conditional_rules();
+    $next_index = count($rules);
     echo '<div class="wrap"><h1>Public Metadata Rules</h1>';
-    if (!empty($_GET['updated'])) echo '<div class="notice notice-success"><p>Activation rules saved. User metadata will be recalculated in batches and connected-site sync will follow.</p></div>';
-    echo '<p>Set fallback values for active and terminated users. Values are applied in this order: individual user override, activation status, Job Title, then the nearest Job Path value (inherited from its parent unless overridden).</p>';
-    echo '<p class="description">Check <strong>Set value</strong> and leave the input blank to intentionally clear values from lower-precedence rules.</p>';
-    echo '<p>Job Path values are configured under <strong>Enterprise Users → Terms → Job Path → Path Data Mapping</strong>. Job Title values are configured in each Job Title. Individual overrides are available in a user’s EUM profile.</p>';
-    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '"><input type="hidden" name="action" value="eum_public_meta_save_activation_rules">';
-    wp_nonce_field('eum_public_meta_save_activation_rules', 'eum_public_meta_nonce');
-    echo '<table class="widefat striped"><thead><tr><th>Field</th><th>Active</th><th>Terminated</th></tr></thead><tbody>';
-    foreach (self::fields() as $key => $field) {
-      echo '<tr><th scope="row">' . esc_html((string)$field['label']) . '<br><code>' . esc_html($key) . '</code></th>';
-      foreach (['active', 'terminated'] as $status) {
-        $enabled = array_key_exists($key, $rules[$status]);
-        $value = $enabled ? (string)$rules[$status][$key] : '';
-        echo '<td><label><input type="checkbox" name="rule_enabled[' . esc_attr($status) . '][' . esc_attr($key) . ']" value="1" ' . checked($enabled, true, false) . '> Set value</label><br>';
-        echo '<input type="text" class="regular-text" name="rule_value[' . esc_attr($status) . '][' . esc_attr($key) . ']" value="' . esc_attr($value) . '">';
-        if ($key === 'public_labels') echo '<br><span class="description">Comma-separated.</span>';
-        echo '</td>';
-      }
-      echo '</tr>';
+    if (!empty($_GET['eum_public_meta_msg'])) {
+      $message = sanitize_text_field((string)wp_unslash($_GET['eum_public_meta_msg']));
+      $type = sanitize_key((string)wp_unslash($_GET['eum_public_meta_type'] ?? 'success'));
+      echo '<div class="notice ' . ($type === 'error' ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($message) . '</p></div>';
     }
-    echo '</tbody></table><p><button type="submit" class="button button-primary">Save Rules</button></p></form></div>';
+    echo '<p>Create rules such as <code>custom:worker_type = contractor</code> and <code>eum_terminated = 0</code>. All conditions in one rule must match. For each public field, the most recently edited matching rule wins. Unchecked fields stay unchanged; check a field with a blank value to clear it.</p>';
+    echo '<p>Condition keys are WordPress user-meta keys. Use <code>custom:field_key</code> for an EUM custom profile field, or dot notation for a nested meta value such as <code>eum_text_fields.department</code>. Public labels from assigned Groups are additive and are removed when the user leaves those Groups.</p>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" data-eum-public-meta-rules="1">';
+    echo '<input type="hidden" name="action" value="eum_public_meta_save_rules">';
+    wp_nonce_field('eum_public_meta_save_rules', 'eum_public_meta_nonce');
+    echo '<div data-eum-public-meta-rule-list data-eum-next-index="' . (int)$next_index . '" style="display:grid;gap:14px;">';
+    if (empty($rules)) echo self::render_rule_row(0, []);
+    else foreach ($rules as $index => $rule) echo self::render_rule_row((string)$index, $rule);
+    echo '</div>';
+    echo '<template data-eum-public-meta-rule-template>' . self::render_rule_row('__INDEX__', []) . '</template>';
+    echo '<p><button type="button" class="button" data-eum-public-meta-add-rule>Add Rule</button> <button type="submit" class="button button-primary">Save Rules and Bulk Update Users</button></p>';
+    echo '</form>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin-top:22px;padding-top:16px;border-top:1px solid #dcdcde;">';
+    echo '<input type="hidden" name="action" value="eum_public_meta_bulk_sync">';
+    wp_nonce_field('eum_public_meta_bulk_sync', 'eum_public_meta_bulk_sync_nonce');
+    echo '<p><button type="submit" class="button">Bulk Sync Public Metadata to Connected Sites</button> <span class="description">Reapply saved rules to every user and queue connected-site syncs in background batches.</span></p></form>';
+    echo '<script>(function(){var root=document.querySelector("[data-eum-public-meta-rules]");if(!root)return;var list=root.querySelector("[data-eum-public-meta-rule-list]"),template=root.querySelector("template[data-eum-public-meta-rule-template]");root.addEventListener("click",function(event){var add=event.target.closest("[data-eum-public-meta-add-rule]");if(add){event.preventDefault();var index=parseInt(list.getAttribute("data-eum-next-index")||"0",10)||0;list.setAttribute("data-eum-next-index",String(index+1));list.insertAdjacentHTML("beforeend",template.innerHTML.replace(/__INDEX__/g,String(index)));return;}var addCondition=event.target.closest("[data-eum-public-meta-add-condition]");if(addCondition){event.preventDefault();var row=addCondition.closest("[data-eum-public-meta-rule]"),conditions=row&&row.querySelector("[data-eum-public-meta-conditions]");if(!conditions)return;var conditionIndex=parseInt(row.getAttribute("data-eum-next-condition-index")||"0",10)||0;row.setAttribute("data-eum-next-condition-index",String(conditionIndex+1));var conditionTemplate=row.querySelector("template[data-eum-public-meta-condition-template]");if(conditionTemplate)conditions.insertAdjacentHTML("beforeend",conditionTemplate.innerHTML.replace(/__COND_INDEX__/g,String(conditionIndex)));return;}var removeCondition=event.target.closest("[data-eum-public-meta-remove-condition]");if(removeCondition){event.preventDefault();var condition=removeCondition.closest("[data-eum-public-meta-condition]");if(condition)condition.remove();return;}var removeRule=event.target.closest("[data-eum-public-meta-remove-rule]");if(removeRule){event.preventDefault();var rule=removeRule.closest("[data-eum-public-meta-rule]");if(rule)rule.remove();}});}());</script></div>';
   }
 
-  public function handle_activation_rules_save(): void {
-    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
-    if (!isset($_POST['eum_public_meta_nonce']) || !wp_verify_nonce((string)wp_unslash($_POST['eum_public_meta_nonce']), 'eum_public_meta_save_activation_rules')) wp_die('Security check failed.');
-    $enabled = isset($_POST['rule_enabled']) && is_array($_POST['rule_enabled']) ? wp_unslash($_POST['rule_enabled']) : [];
-    $values = isset($_POST['rule_value']) && is_array($_POST['rule_value']) ? wp_unslash($_POST['rule_value']) : [];
-    $rules = [];
-    foreach (['active', 'terminated'] as $status) {
-      $rules[$status] = [];
-      foreach (array_keys(self::fields()) as $key) {
-        if (empty($enabled[$status][$key])) continue;
-        $rules[$status][$key] = self::sanitize_value($key, $values[$status][$key] ?? '');
-      }
+  private static function render_rule_row($index, array $rule): string {
+    $conditions = is_array($rule['conditions'] ?? null) ? array_values($rule['conditions']) : [];
+    if (empty($conditions)) $conditions = [[]];
+    $metadata = is_array($rule['metadata'] ?? null) ? $rule['metadata'] : [];
+    ob_start();
+    echo '<section data-eum-public-meta-rule data-eum-next-condition-index="' . (int)count($conditions) . '" style="padding:16px;border:1px solid #c3c4c7;border-radius:6px;background:#fff;">';
+    echo '<input type="hidden" name="rules[' . esc_attr((string)$index) . '][id]" value="' . esc_attr((string)($rule['id'] ?? '')) . '">';
+    echo '<h2 style="margin:0 0 12px;font-size:16px;">Conditional Rule</h2>';
+    echo '<div data-eum-public-meta-conditions style="display:grid;gap:8px;">';
+    foreach ($conditions as $condition_index => $condition) {
+      echo self::render_condition_row($index, (string)$condition_index, is_array($condition) ? $condition : []);
     }
-    update_option(self::STATUS_RULES_OPTION, $rules, false);
-    $this->schedule_rebuild();
-    wp_safe_redirect(add_query_arg(['page' => 'eum-public-meta', 'updated' => '1'], admin_url('admin.php')));
+    echo '</div>';
+    echo '<template data-eum-public-meta-condition-template>' . self::render_condition_row($index, '__COND_INDEX__', []) . '</template>';
+    echo '<p><button type="button" class="button" data-eum-public-meta-add-condition>Add AND condition</button></p>';
+    echo '<h3 style="margin:16px 0 8px;">Set Public Metadata</h3>';
+    echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;">';
+    foreach (self::fields() as $key => $field) {
+      $enabled = array_key_exists($key, $metadata);
+      $value = $enabled ? (string)$metadata[$key] : '';
+      echo '<div><label><input type="checkbox" name="rules[' . esc_attr((string)$index) . '][metadata][' . esc_attr($key) . '][set]" value="1" ' . checked($enabled, true, false) . '> <strong>' . esc_html((string)$field['label']) . '</strong></label><br>';
+      echo '<input type="text" name="rules[' . esc_attr((string)$index) . '][metadata][' . esc_attr($key) . '][value]" value="' . esc_attr($value) . '" class="regular-text" style="max-width:100%;width:100%;">';
+      if ($key === 'public_labels') echo '<span class="description">Comma-separated. Group labels are added separately.</span>';
+      echo '</div>';
+    }
+    echo '</div><p style="margin:14px 0 0;"><button type="button" class="button-link-delete" data-eum-public-meta-remove-rule>Remove Rule</button></p></section>';
+    return ob_get_clean();
+  }
+
+  private static function render_condition_row($rule_index, $condition_index, array $condition): string {
+    $key = (string)($condition['meta_key'] ?? '');
+    $value = (string)($condition['value'] ?? '');
+    ob_start();
+    echo '<div data-eum-public-meta-condition style="display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto;gap:8px;align-items:end;">';
+    echo '<label>User Meta Key<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][meta_key]" value="' . esc_attr($key) . '" class="regular-text" placeholder="eum_terminated"></label>';
+    echo '<label>Equals<br><input type="text" name="rules[' . esc_attr((string)$rule_index) . '][conditions][' . esc_attr((string)$condition_index) . '][value]" value="' . esc_attr($value) . '" class="regular-text"></label>';
+    echo '<button type="button" class="button" data-eum-public-meta-remove-condition>Remove condition</button></div>';
+    return ob_get_clean();
+  }
+
+  public function handle_rules_save(): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
+    if (!isset($_POST['eum_public_meta_nonce']) || !wp_verify_nonce((string)wp_unslash($_POST['eum_public_meta_nonce']), 'eum_public_meta_save_rules')) wp_die('Security check failed.');
+    $posted_rows = isset($_POST['rules']) && is_array($_POST['rules']) ? wp_unslash($_POST['rules']) : [];
+    $existing = [];
+    foreach (self::conditional_rules() as $rule) {
+      $id = sanitize_text_field((string)($rule['id'] ?? ''));
+      if ($id !== '') $existing[$id] = $rule;
+    }
+    $rules = [];
+    $latest_stamp = microtime(true);
+    foreach ($existing as $old_rule) $latest_stamp = max($latest_stamp, (float)($old_rule['updated_at'] ?? 0));
+    foreach ($posted_rows as $row) {
+      if (!is_array($row)) continue;
+      $posted_conditions = is_array($row['conditions'] ?? null) ? $row['conditions'] : [];
+      $conditions = [];
+      $has_partial_condition = false;
+      foreach ($posted_conditions as $condition) {
+        if (!is_array($condition)) continue;
+        $key = self::sanitize_condition_key((string)($condition['meta_key'] ?? ''));
+        $value = sanitize_text_field((string)($condition['value'] ?? ''));
+        if ($key === '' && $value === '') continue;
+        if ($key === '') { $has_partial_condition = true; continue; }
+        $conditions[] = ['meta_key' => $key, 'value' => $value];
+      }
+      $metadata = [];
+      $posted_metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : [];
+      foreach (array_keys(self::fields()) as $key) {
+        if (empty($posted_metadata[$key]['set'])) continue;
+        $metadata[$key] = self::sanitize_value($key, $posted_metadata[$key]['value'] ?? '');
+      }
+      if (empty($conditions) && empty($metadata) && !$has_partial_condition) continue;
+      if ($has_partial_condition || empty($conditions) || empty($metadata)) {
+        $this->redirect_with_notice('Each rule needs at least one complete AND condition and one selected public metadata field.', 'error');
+      }
+      $id = sanitize_text_field((string)($row['id'] ?? ''));
+      if ($id === '' || strlen($id) > 80) $id = wp_generate_uuid4();
+      $new_rule = ['id' => $id, 'conditions' => array_values($conditions), 'metadata' => $metadata];
+      $old = $existing[$id] ?? null;
+      if (is_array($old)
+        && ($old['conditions'] ?? []) === $new_rule['conditions']
+        && ($old['metadata'] ?? []) === $new_rule['metadata']) {
+        $new_rule['updated_at'] = (float)($old['updated_at'] ?? $latest_stamp);
+      } else {
+        $latest_stamp += 0.000001;
+        $new_rule['updated_at'] = $latest_stamp;
+      }
+      $rules[] = $new_rule;
+    }
+    update_option(self::RULES_OPTION, array_values($rules), false);
+    $queued = $this->schedule_rebuild();
+    $this->redirect_with_notice(sprintf('Saved %d rule(s). Bulk update and connected-site sync queued for %d user(s).', count($rules), $queued));
+  }
+
+  public function handle_bulk_sync(): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
+    if (!isset($_POST['eum_public_meta_bulk_sync_nonce']) || !wp_verify_nonce((string)wp_unslash($_POST['eum_public_meta_bulk_sync_nonce']), 'eum_public_meta_bulk_sync')) wp_die('Security check failed.');
+    $queued = $this->schedule_rebuild();
+    $this->redirect_with_notice(sprintf('Bulk public metadata update and connected-site sync queued for %d user(s).', $queued));
+  }
+
+  private function redirect_with_notice(string $message, string $type = 'success'): void {
+    wp_safe_redirect(add_query_arg([
+      'page' => 'eum-public-meta',
+      'eum_public_meta_msg' => $message,
+      'eum_public_meta_type' => $type,
+    ], admin_url('admin.php')));
     exit;
   }
 
-  private function schedule_rebuild(): void {
+  public function admin_menu(): void {
+    add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Public Metadata Rules', 'Public Metadata Rules', 'read', 'eum-public-meta', [$this, 'render_rules_page']);
+  }
+
+  private function schedule_rebuild(): int {
     $user_ids = get_users(['fields' => 'ids', 'number' => -1]);
-    if (empty($user_ids)) return;
+    if (empty($user_ids)) return 0;
     $chunks = array_chunk(array_map('intval', $user_ids), 100);
     $start = time() + 10;
     foreach ($chunks as $index => $batch) {
@@ -338,6 +496,7 @@ class EUM_Public_Meta {
         wp_schedule_single_event($start + ($index * 10), self::REBUILD_HOOK, $args);
       }
     }
+    return count($user_ids);
   }
 
   public function process_rebuild_batch($user_ids): void {

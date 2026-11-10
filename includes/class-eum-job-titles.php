@@ -340,7 +340,6 @@ class EUM_Job_Titles {
         update_post_meta($title_id, self::META_ALLOWED_JOB_PATHS, $allowed_paths);
         update_post_meta($title_id, self::META_DEFAULT_GROUPS, $groups);
         update_post_meta($title_id, self::META_DEFAULT_PROJECTS, $projects);
-        if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::save_job_title_fields($title_id, $_POST);
       }
       self::invalidate_cache();
     } catch (\Throwable $e) {
@@ -422,9 +421,8 @@ class EUM_Job_Titles {
     if ($edit_post) {
       echo '<p><label><strong>Job Title Name</strong></label><br><input type="text" name="job_title_name" value="' . esc_attr($name) . '" class="regular-text" style="width:100%;max-width:420px;" required></p>';
     } else {
-      echo '<p><label><strong>Job Title Names</strong></label><br><textarea name="job_title_name" rows="6" class="large-text" style="max-width:420px;" placeholder="Enter one job title per line" required></textarea><span class="description">Each line becomes its own job title record. The selected paths, groups, projects, and public metadata apply to every title.</span></p>';
+      echo '<p><label><strong>Job Title Names</strong></label><br><textarea name="job_title_name" rows="6" class="large-text" style="max-width:420px;" placeholder="Enter one job title per line" required></textarea><span class="description">Each line becomes its own job title record. The selected paths, groups, and projects apply to every title.</span></p>';
     }
-    if (class_exists('EUM_Public_Meta')) EUM_Public_Meta::render_job_title_fields($edit_id);
     echo '<p><label><strong>Allowed Job Paths</strong></label><br>';
     echo class_exists('EUM_Profiles') ? EUM_Profiles::render_job_path_directory_checkboxes('allowed_job_paths', $allowed_paths, get_current_user_id(), ['enforce_manageable_job_paths' => false]) : $this->render_checkboxes('allowed_job_paths', $this->all_job_paths_for_form(), $allowed_paths, 'No Job Paths exist yet.');
     echo '<span class="description">These paths can use this title inside the Job Path selector.</span></p>';
