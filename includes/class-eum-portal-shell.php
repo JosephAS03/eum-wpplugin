@@ -5,14 +5,18 @@ class EUM_Portal_Shell {
   const PAGE_OPTION = 'eum_portal_managed_pages';
   const LEGACY_MIGRATION_OPTION = 'eum_portal_legacy_shortcodes_migrated_v1';
   const PAGE_META = '_eum_managed_portal_page';
+  const LINK_BOOKMARKS_META = 'eum_dynamic_link_bookmarks';
   private static $rendered = false;
   private static $fallback_render = false;
 
   public function init(): void {
     add_action('wp_enqueue_scripts', [$this, 'enqueue_assets'], 30);
+    add_action('parse_request', [$this, 'set_app_route_query_var'], 0);
     add_action('wp_ajax_eum_portal_link_search', [$this, 'ajax_search_dynamic_links']);
+    add_action('wp_ajax_eum_portal_link_bookmark', [$this, 'ajax_bookmark_dynamic_link']);
     add_action('wp_body_open', [$this, 'render_frontend_bar'], 1);
     add_action('wp_footer', [$this, 'render_frontend_bar_fallback'], 5);
+    add_action('template_redirect', [$this, 'handle_app_route'], 0);
     add_action('template_redirect', [$this, 'redirect_retired_inbox_routes'], 1);
     add_action('init', [$this, 'migrate_legacy_shortcodes'], 98);
     add_action('init', [$this, 'retire_managed_inbox_pages'], 97);
@@ -74,6 +78,148 @@ class EUM_Portal_Shell {
   public function hide_frontend_admin_bar(bool $show): bool {
     if (!is_admin() && is_user_logged_in()) return false;
     return $show;
+  }
+
+  public function set_app_route_query_var($wp): void {
+    $slug = self::app_route_slug_from_request();
+    if ($slug === '' || !is_object($wp) || !isset($wp->query_vars) || !is_array($wp->query_vars)) return;
+    $wp->query_vars['eum_app_route'] = $slug;
+  }
+
+  public function handle_app_route(): void {
+    $slug = self::app_route_slug_from_request();
+    if ($slug === '') return;
+
+    $app_url = home_url('/app/' . rawurlencode($slug) . '/');
+    if (!is_user_logged_in()) {
+      wp_safe_redirect(wp_login_url($app_url));
+      exit;
+    }
+
+    $user = wp_get_current_user();
+    if (!$user instanceof WP_User || (int)$user->ID <= 0) {
+      wp_die('This app is not available to your account.', 'App unavailable', ['response' => 404]);
+    }
+
+    $destinations = $this->app_destinations_for_slug($slug, $user);
+    if (empty($destinations)) {
+      wp_die('This app or site is not available to your account.', 'App unavailable', ['response' => 404]);
+    }
+    if (count($destinations) === 1 && empty($destinations[0]['click_login_id'])) {
+      $url = self::validated_app_destination((string)$destinations[0]['url']);
+      if ($url !== '') {
+        wp_redirect($url, 302, 'EUM Portal App Link');
+        exit;
+      }
+      wp_die('The app destination is invalid.', 'App unavailable', ['response' => 404]);
+    }
+
+    $this->render_app_destination_chooser($slug, $destinations);
+  }
+
+  private static function app_route_slug_from_request(): string {
+    $request_path = isset($_SERVER['REQUEST_URI']) ? (string)wp_parse_url((string)$_SERVER['REQUEST_URI'], PHP_URL_PATH) : '';
+    if ($request_path === '') return '';
+    $home_path = trim((string)wp_parse_url(home_url('/'), PHP_URL_PATH), '/');
+    $request_path = trim($request_path, '/');
+    if ($home_path !== '') {
+      if ($request_path === $home_path) return '';
+      if (strpos($request_path, $home_path . '/') === 0) $request_path = substr($request_path, strlen($home_path) + 1);
+    }
+    $segments = explode('/', $request_path);
+    if (count($segments) !== 2 || strtolower((string)$segments[0]) !== 'app') return '';
+    $slug = sanitize_title(rawurldecode((string)$segments[1]));
+    return $slug;
+  }
+
+  private function app_destinations_for_slug(string $slug, WP_User $user): array {
+    $needle = self::normalize_app_alias($slug);
+    if ($needle === '') return [];
+    $matches = [];
+    foreach ($this->app_launcher_items($user) as $app) {
+      $app_label = sanitize_text_field((string)($app['label'] ?? ''));
+      $parent_match = self::normalize_app_alias($app_label) === $needle;
+      $children = [];
+      foreach (['choices', 'mailboxes'] as $child_key) {
+        foreach ((array)($app[$child_key] ?? []) as $child) {
+          if (!is_array($child)) continue;
+          $child_label = sanitize_text_field((string)($child['label'] ?? ''));
+          $child_url = self::validated_app_destination((string)($child['url'] ?? ''));
+          if ($child_label === '' || $child_url === '') continue;
+          $child_matches = self::normalize_app_alias($child_label) === $needle;
+          if (!$parent_match && !$child_matches) continue;
+          $record = ['label' => $app_label . ' · ' . $child_label, 'url' => $child_url];
+          foreach (['click_login_id', 'click_login_assignment_id'] as $key) {
+            if (!empty($child[$key])) $record[$key] = sanitize_key((string)$child[$key]);
+          }
+          $children[] = $record;
+        }
+      }
+      if (!empty($children)) {
+        $matches = array_merge($matches, $children);
+        continue;
+      }
+
+      if ($parent_match) {
+        $url = self::validated_app_destination((string)($app['url'] ?? ''));
+        if ($url !== '') {
+          $record = ['label' => $app_label, 'url' => $url];
+          foreach (['click_login_id', 'click_login_assignment_id'] as $key) {
+            if (!empty($app[$key])) $record[$key] = sanitize_key((string)$app[$key]);
+          }
+          $matches[] = $record;
+        }
+      }
+    }
+
+    $unique = [];
+    $seen = [];
+    foreach ($matches as $match) {
+      $key = (string)$match['url'] . '|' . (string)($match['click_login_id'] ?? '') . '|' . (string)($match['click_login_assignment_id'] ?? '');
+      if (isset($seen[$key])) continue;
+      $seen[$key] = true;
+      $unique[] = $match;
+    }
+    return $unique;
+  }
+
+  private static function normalize_app_alias(string $value): string {
+    $value = html_entity_decode(sanitize_text_field($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    if (function_exists('remove_accents')) $value = remove_accents($value);
+    return strtolower((string)preg_replace('/[^a-z0-9]/i', '', $value));
+  }
+
+  private static function validated_app_destination(string $url): string {
+    $url = esc_url_raw(trim($url));
+    if ($url === '') return '';
+    if (str_starts_with($url, '/') && !str_starts_with($url, '//')) $url = home_url($url);
+    $parts = wp_parse_url($url);
+    if (!is_array($parts) || empty($parts['host']) || isset($parts['user']) || isset($parts['pass']) || !in_array(strtolower((string)($parts['scheme'] ?? '')), ['http', 'https'], true)) return '';
+    return $url;
+  }
+
+  private function render_app_destination_chooser(string $slug, array $destinations): void {
+    status_header(200);
+    nocache_headers();
+    get_header();
+    $single_destination = count($destinations) === 1;
+    $heading = $single_destination ? 'Continue to ' . (string)($destinations[0]['label'] ?? $slug) : 'Choose where to go';
+    $description = $single_destination ? 'Open this app in a new tab.' : 'Select an app or site available to your account.';
+    echo '<main class="eum-app-route-chooser" data-eum-click-login-rest-root="' . esc_url(rest_url(EUM_Click_Login::REST_NAMESPACE . '/')) . '" data-eum-click-login-rest-nonce="' . esc_attr(wp_create_nonce('wp_rest')) . '" style="max-width:760px;margin:36px auto;padding:24px;background:#fff;border:1px solid #eaecf0;border-radius:14px;box-shadow:0 8px 28px rgba(16,24,40,.08)">';
+    echo '<h1 style="margin:0 0 8px;color:#101828;font-size:24px">' . esc_html($heading) . '</h1>';
+    echo '<p style="margin:0 0 18px;color:#667085">' . esc_html($description) . '</p>';
+    echo '<div style="display:grid;gap:8px">';
+    foreach ($destinations as $destination) {
+      $url = self::validated_app_destination((string)($destination['url'] ?? ''));
+      if ($url === '') continue;
+      echo '<a href="' . esc_url($url) . '"';
+      if (!empty($destination['click_login_id'])) echo ' data-eum-click-login-app="' . esc_attr((string)$destination['click_login_id']) . '" data-eum-click-login-assignment="' . esc_attr((string)($destination['click_login_assignment_id'] ?? '')) . '"';
+      echo ' target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border:1px solid #eaecf0;border-radius:9px;color:#175cd3;text-decoration:none;font-weight:600">';
+      echo '<span>' . esc_html((string)($destination['label'] ?? 'Open app')) . '</span><span aria-hidden="true">&#8599;</span></a>';
+    }
+    echo '</div></main>';
+    get_footer();
+    exit;
   }
 
   public function enqueue_assets(): void {
@@ -174,7 +320,7 @@ class EUM_Portal_Shell {
         <label class="screen-reader-text" for="eum-portal-link-search-<?php echo (int)$user->ID; ?>">Search dynamic links</label>
         <input id="eum-portal-link-search-<?php echo (int)$user->ID; ?>" type="search" autocomplete="off" placeholder="Search links" aria-label="Search dynamic links" aria-controls="eum-portal-link-results-<?php echo (int)$user->ID; ?>" aria-expanded="false" aria-autocomplete="list">
         <div class="eum-portal-shell__popup eum-portal-shell__link-results" id="eum-portal-link-results-<?php echo (int)$user->ID; ?>" role="dialog" aria-label="Dynamic link search results" aria-hidden="true">
-          <p class="eum-portal-shell__empty">Type to search available links.</p>
+          <p class="eum-portal-shell__empty">Your bookmarked links will appear here.</p>
         </div>
       </div>
 
@@ -264,9 +410,17 @@ class EUM_Portal_Shell {
 
     $query = sanitize_text_field(wp_unslash((string)($_POST['q'] ?? '')));
     $query = function_exists('mb_substr') ? trim(mb_substr($query, 0, 100)) : trim(substr($query, 0, 100));
-    if ($query === '') wp_send_json_success(['items' => []]);
-
     $context = EUM_Dynamic_Links::access_context(get_current_user_id());
+    $bookmark_ids = self::link_bookmark_ids(get_current_user_id());
+    if ($query === '') {
+      $items = [];
+      foreach ($bookmark_ids as $post_id) {
+        $item = self::dynamic_link_search_item($post_id, $context, true);
+        if ($item !== null) $items[] = $item;
+      }
+      wp_send_json_success(['items' => $items, 'view' => 'bookmarks']);
+    }
+
     $posts = get_posts([
       'post_type' => EUM_Dynamic_Links::CPT,
       'post_status' => 'publish',
@@ -281,22 +435,11 @@ class EUM_Portal_Shell {
 
     foreach ((array)$posts as $post) {
       $post_id = (int)$post->ID;
-      if (!EUM_Dynamic_Links::link_is_visible_to_context($post_id, $context, 'any')) continue;
-
-      $url = esc_url_raw((string)get_post_meta($post_id, EUM_Dynamic_Links::META_URL, true));
-      if ($url === '') continue;
-      $description_raw = (string)get_post_meta($post_id, EUM_Dynamic_Links::META_DESC, true);
-      $description = sanitize_text_field(wp_strip_all_tags(html_entity_decode($description_raw, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-      $category_names = wp_get_object_terms($post_id, EUM_Dynamic_Links::TAX_CATEGORY, ['fields' => 'names']);
-      if (is_wp_error($category_names)) $category_names = [];
-
-      $raw_title = (string)($post->post_title ?? '');
-      $title = sanitize_text_field(wp_strip_all_tags(html_entity_decode($raw_title, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
-      $header_raw = EUM_Dynamic_Links::dashboard_header_for_post($post_id);
-      $header = sanitize_text_field(wp_strip_all_tags(html_entity_decode($header_raw, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+      $item = self::dynamic_link_search_item($post_id, $context, in_array($post_id, $bookmark_ids, true));
+      if ($item === null) continue;
       $haystack = function_exists('mb_strtolower')
-        ? mb_strtolower($title . ' ' . $header . ' ' . $description . ' ' . implode(' ', (array)$category_names) . ' ' . $url)
-        : strtolower($title . ' ' . $header . ' ' . $description . ' ' . implode(' ', (array)$category_names) . ' ' . $url);
+        ? mb_strtolower($item['title'] . ' ' . $item['header'] . ' ' . $item['description'] . ' ' . implode(' ', $item['categories']) . ' ' . $item['url'])
+        : strtolower($item['title'] . ' ' . $item['header'] . ' ' . $item['description'] . ' ' . implode(' ', $item['categories']) . ' ' . $item['url']);
       $all_terms_match = true;
       foreach ((array)$terms as $term) {
         if ($term !== '' && strpos($haystack, $term) === false) {
@@ -306,19 +449,11 @@ class EUM_Portal_Shell {
       }
       if (!$all_terms_match) continue;
 
-      $target = (string)get_post_meta($post_id, EUM_Dynamic_Links::META_TARGET, true);
-      if (!in_array($target, ['_self', '_blank'], true)) $target = '_self';
-      $title_for_match = function_exists('mb_strtolower') ? mb_strtolower($title) : strtolower($title);
+      $title_for_match = function_exists('mb_strtolower') ? mb_strtolower($item['title']) : strtolower($item['title']);
       $query_for_match = function_exists('mb_strtolower') ? mb_strtolower($query) : strtolower($query);
       $rank = ($title_for_match === $query_for_match) ? 0 : ((strpos($title_for_match, $query_for_match) === 0) ? 1 : ((strpos($title_for_match, $query_for_match) !== false) ? 2 : 3));
-      $matches[] = [
-        'title' => $title,
-        'header' => $header,
-        'description' => $description,
-        'url' => $url,
-        'target' => $target,
-        'rank' => $rank,
-      ];
+      $item['rank'] = $rank;
+      $matches[] = $item;
     }
 
     usort($matches, static function ($a, $b) {
@@ -326,9 +461,76 @@ class EUM_Portal_Shell {
       return strcasecmp($a['title'], $b['title']);
     });
     $matches = array_slice($matches, 0, 12);
-    foreach ($matches as &$match) unset($match['rank']);
+    foreach ($matches as &$match) {
+      unset($match['rank'], $match['categories']);
+    }
     unset($match);
-    wp_send_json_success(['items' => $matches]);
+    wp_send_json_success(['items' => $matches, 'view' => 'search']);
+  }
+
+  public function ajax_bookmark_dynamic_link(): void {
+    if (!is_user_logged_in()) wp_send_json_error(['message' => 'Please sign in to bookmark links.'], 401);
+    check_ajax_referer('eum_portal_link_search', 'nonce');
+    if (!class_exists('EUM_Dynamic_Links')) wp_send_json_error(['message' => 'Link search is unavailable.'], 503);
+
+    $post_id = absint($_POST['link_id'] ?? 0);
+    $bookmark = sanitize_text_field(wp_unslash((string)($_POST['bookmarked'] ?? '')));
+    if ($post_id <= 0 || !in_array($bookmark, ['0', '1'], true)) {
+      wp_send_json_error(['message' => 'Choose a valid link.'], 400);
+    }
+
+    $user_id = get_current_user_id();
+    $context = EUM_Dynamic_Links::access_context($user_id);
+    if (self::dynamic_link_search_item($post_id, $context, false) === null) {
+      wp_send_json_error(['message' => 'That link is unavailable.'], 404);
+    }
+
+    $bookmark_ids = self::link_bookmark_ids($user_id);
+    if ($bookmark === '1') {
+      if (!in_array($post_id, $bookmark_ids, true)) $bookmark_ids[] = $post_id;
+    } else {
+      $bookmark_ids = array_values(array_diff($bookmark_ids, [$post_id]));
+    }
+
+    if (empty($bookmark_ids)) delete_user_meta($user_id, self::LINK_BOOKMARKS_META);
+    else update_user_meta($user_id, self::LINK_BOOKMARKS_META, $bookmark_ids);
+    wp_send_json_success(['link_id' => $post_id, 'bookmarked' => $bookmark === '1']);
+  }
+
+  private static function link_bookmark_ids(int $user_id): array {
+    $stored = get_user_meta($user_id, self::LINK_BOOKMARKS_META, true);
+    $ids = array_values(array_unique(array_filter(array_map('absint', (array)$stored))));
+    return $ids;
+  }
+
+  private static function dynamic_link_search_item(int $post_id, array $context, bool $bookmarked): ?array {
+    if ($post_id <= 0 || !EUM_Dynamic_Links::link_is_visible_to_context($post_id, $context, 'any')) return null;
+    $post = get_post($post_id);
+    if (!$post instanceof WP_Post || $post->post_type !== EUM_Dynamic_Links::CPT || $post->post_status !== 'publish') return null;
+
+    $url = esc_url_raw((string)get_post_meta($post_id, EUM_Dynamic_Links::META_URL, true));
+    if ($url === '') return null;
+    $description_raw = (string)get_post_meta($post_id, EUM_Dynamic_Links::META_DESC, true);
+    $description = sanitize_text_field(wp_strip_all_tags(html_entity_decode($description_raw, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    $category_names = wp_get_object_terms($post_id, EUM_Dynamic_Links::TAX_CATEGORY, ['fields' => 'names']);
+    if (is_wp_error($category_names)) $category_names = [];
+    $raw_title = (string)($post->post_title ?? '');
+    $title = sanitize_text_field(wp_strip_all_tags(html_entity_decode($raw_title, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    $header_raw = EUM_Dynamic_Links::dashboard_header_for_post($post_id);
+    $header = sanitize_text_field(wp_strip_all_tags(html_entity_decode($header_raw, ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    $target = (string)get_post_meta($post_id, EUM_Dynamic_Links::META_TARGET, true);
+    if (!in_array($target, ['_self', '_blank'], true)) $target = '_self';
+
+    return [
+      'id' => $post_id,
+      'title' => $title,
+      'header' => $header,
+      'description' => $description,
+      'url' => $url,
+      'target' => $target,
+      'bookmarked' => $bookmarked,
+      'categories' => array_values(array_map('strval', (array)$category_names)),
+    ];
   }
 
   public function render_frontend_bar_fallback(): void {

@@ -34,7 +34,7 @@
     if (!anchor) return;
 
     const appId = anchor.getAttribute('data-eum-click-login-app') || '';
-    const shell = anchor.closest('.eum-portal-shell');
+    const shell = anchor.closest('[data-eum-click-login-rest-root]');
     const apiRoot = shell && shell.getAttribute('data-eum-click-login-rest-root');
     const nonce = shell && shell.getAttribute('data-eum-click-login-rest-nonce');
     if (!appId || !apiRoot || !nonce || !window.chrome || !chrome.runtime) return;

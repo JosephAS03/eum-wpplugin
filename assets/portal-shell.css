@@ -322,14 +322,32 @@
   padding: 10px 11px;
 }
 
+.eum-portal-shell__link-results-heading {
+  margin: 0;
+  padding: 8px 11px 5px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
 .eum-portal-shell__link-list {
   display: flex;
   flex-direction: column;
 }
 
+.eum-portal-shell__link-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
 .eum-portal-shell__link-result {
   display: flex;
+  flex: 1;
   flex-direction: column;
+  min-width: 0;
   gap: 3px;
   padding: 10px 11px;
   border-radius: 5px;
@@ -342,6 +360,37 @@
   background: #f1f4f8;
   color: #12233a;
   outline: none;
+}
+
+.eum-portal-shell__link-bookmark {
+  flex: 0 0 38px;
+  align-self: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #667085;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.eum-portal-shell__link-bookmark:hover,
+.eum-portal-shell__link-bookmark:focus-visible {
+  background: #f1f4f8;
+  color: #b7791f;
+  outline: none;
+}
+
+.eum-portal-shell__link-bookmark[aria-pressed="true"] {
+  color: #d99b00;
+}
+
+.eum-portal-shell__link-bookmark:disabled {
+  cursor: wait;
+  opacity: .55;
 }
 
 .eum-portal-shell__link-title {

@@ -1154,6 +1154,7 @@
   var timer = null;
   var controller = null;
   var requestNumber = 0;
+  var currentView = 'bookmarks';
 
   function setSearchOpen(open) {
     input.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -1161,24 +1162,39 @@
     search.classList.toggle('is-open', open);
   }
 
-  function showMessage(message) {
+  function showMessage(message, view) {
     results.replaceChildren();
+    if (view === 'bookmarks') {
+      var heading = document.createElement('p');
+      heading.className = 'eum-portal-shell__link-results-heading';
+      heading.textContent = 'Bookmarks';
+      results.appendChild(heading);
+    }
     var messageNode = document.createElement('p');
     messageNode.className = 'eum-portal-shell__empty';
     messageNode.textContent = message;
     results.appendChild(messageNode);
   }
 
-  function renderItems(items) {
+  function renderItems(items, view) {
     results.replaceChildren();
+    currentView = view === 'bookmarks' ? 'bookmarks' : 'search';
     if (!items.length) {
-      showMessage('No matching links were found.');
+      showMessage(currentView === 'bookmarks' ? 'No bookmarks yet. Star a search result to save it.' : 'No matching links were found.', currentView);
       return;
+    }
+    if (currentView === 'bookmarks') {
+      var heading = document.createElement('p');
+      heading.className = 'eum-portal-shell__link-results-heading';
+      heading.textContent = 'Bookmarks';
+      results.appendChild(heading);
     }
 
     var list = document.createElement('div');
     list.className = 'eum-portal-shell__link-list';
     items.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'eum-portal-shell__link-row';
       var link = document.createElement('a');
       link.className = 'eum-portal-shell__link-result';
       link.href = item.url;
@@ -1203,26 +1219,67 @@
       link.addEventListener('click', function () {
         setSearchOpen(false);
       });
-      list.appendChild(link);
+
+      var bookmark = document.createElement('button');
+      bookmark.type = 'button';
+      bookmark.className = 'eum-portal-shell__link-bookmark';
+      bookmark.setAttribute('aria-pressed', item.bookmarked ? 'true' : 'false');
+      bookmark.setAttribute('aria-label', item.bookmarked ? 'Remove bookmark for ' + (item.title || 'link') : 'Bookmark ' + (item.title || 'link'));
+      bookmark.title = item.bookmarked ? 'Remove bookmark' : 'Bookmark this link';
+      bookmark.textContent = item.bookmarked ? '★' : '☆';
+      bookmark.addEventListener('click', function () {
+        if (!window.EUMPortalShell || !EUMPortalShell.ajaxUrl || !EUMPortalShell.searchNonce) return;
+        bookmark.disabled = true;
+        var desired = !item.bookmarked;
+        var body = new URLSearchParams();
+        body.set('action', 'eum_portal_link_bookmark');
+        body.set('nonce', EUMPortalShell.searchNonce);
+        body.set('link_id', String(item.id || 0));
+        body.set('bookmarked', desired ? '1' : '0');
+        window.fetch(EUMPortalShell.ajaxUrl, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+          body: body.toString()
+        }).then(function (response) {
+          if (!response.ok) throw new Error('Bookmark update failed');
+          return response.json();
+        }).then(function (payload) {
+          if (!payload || !payload.success) throw new Error('Bookmark update failed');
+          item.bookmarked = desired;
+          if (currentView === 'bookmarks' && !desired) {
+            row.remove();
+            if (!list.querySelector('.eum-portal-shell__link-row')) showMessage('No bookmarks yet. Star a search result to save it.', 'bookmarks');
+            return;
+          }
+          bookmark.setAttribute('aria-pressed', desired ? 'true' : 'false');
+          bookmark.setAttribute('aria-label', desired ? 'Remove bookmark for ' + (item.title || 'link') : 'Bookmark ' + (item.title || 'link'));
+          bookmark.title = desired ? 'Remove bookmark' : 'Bookmark this link';
+          bookmark.textContent = desired ? '★' : '☆';
+        }).catch(function () {
+          bookmark.title = 'Could not update bookmark. Try again.';
+          bookmark.setAttribute('aria-label', 'Could not update bookmark for ' + (item.title || 'link') + '. Try again.');
+        }).finally(function () {
+          bookmark.disabled = false;
+        });
+      });
+
+      row.appendChild(link);
+      row.appendChild(bookmark);
+      list.appendChild(row);
     });
     results.appendChild(list);
   }
 
-  input.addEventListener('input', function () {
-    var query = input.value.trim();
+  function loadResults(query) {
     requestNumber += 1;
     var currentRequest = requestNumber;
     window.clearTimeout(timer);
     if (controller) controller.abort();
-
-    if (!query) {
-      showMessage('Type to search available links.');
-      setSearchOpen(false);
-      return;
-    }
+    controller = null;
 
     setSearchOpen(true);
-    showMessage('Searching links…');
+    showMessage(query ? 'Searching links…' : 'Loading bookmarks…', query ? 'search' : 'bookmarks');
     timer = window.setTimeout(function () {
       if (!window.EUMPortalShell || !EUMPortalShell.ajaxUrl || !EUMPortalShell.searchNonce) {
         showMessage('Link search is unavailable right now.');
@@ -1249,16 +1306,20 @@
         if (!payload || !payload.success || !payload.data || !Array.isArray(payload.data.items)) {
           throw new Error('Search response was invalid');
         }
-        renderItems(payload.data.items);
+        renderItems(payload.data.items, payload.data.view);
       }).catch(function (error) {
         if (error && error.name === 'AbortError') return;
         if (currentRequest === requestNumber) showMessage('Link search is unavailable right now.');
       });
-    }, 180);
+    }, query ? 180 : 0);
+  }
+
+  input.addEventListener('input', function () {
+    loadResults(input.value.trim());
   });
 
   input.addEventListener('focus', function () {
-    if (input.value.trim()) setSearchOpen(true);
+    loadResults(input.value.trim());
   });
 
   input.addEventListener('keydown', function (event) {
