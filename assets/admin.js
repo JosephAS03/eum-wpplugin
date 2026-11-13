@@ -1282,7 +1282,7 @@
     return window.fetch(url, fetchOptions).then(function (response) {
       return response.text().then(function (html) {
         var responseDocument = new DOMParser().parseFromString(html, 'text/html');
-        var notice = responseDocument.querySelector('[data-eum-job-notice="1"]');
+        var notice = responseDocument.querySelector('[data-eum-job-notice="1"], [data-eum-team-bulk-notice="1"]');
         var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });
         if (currentRegions.some(function (region) { return !region; })) {
           if (options && options.isPost) window.location.assign(response.url || url);
@@ -1293,7 +1293,10 @@
           strictTargets: !!(options && options.strictTargets),
           fallbackOnMissing: !!(options && options.isPost)
         });
-        if (replaced && notice) showAjaxStatus(notice.textContent.trim(), notice.getAttribute('data-eum-notice-type') === 'error');
+        if (replaced && notice) {
+          var noticeType = notice.getAttribute('data-eum-notice-type');
+          showAjaxStatus(notice.textContent.trim(), noticeType === 'error' || noticeType === 'warning');
+        }
         else if (replaced) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
         else if (!(options && options.isPost)) showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
         return replaced;

@@ -732,7 +732,7 @@ class EUM_Manager_Portal {
     $class = 'notice notice-success';
     if ($type === 'error') $class = 'notice notice-error';
     elseif ($type === 'warning') $class = 'notice notice-warning';
-    return '<div class="' . esc_attr($class) . '"><p>' . esc_html($msg) . '</p></div>';
+    return '<div class="' . esc_attr($class) . '" data-eum-team-bulk-notice="1" data-eum-notice-type="' . esc_attr($type) . '"><p>' . esc_html($msg) . '</p></div>';
   }
 
   private function render_team_email_export_controls(): string {
@@ -1063,8 +1063,16 @@ class EUM_Manager_Portal {
       echo '<label><input type="checkbox" name="skip_email" value="1" checked> Skip email notification</label>';
       echo '</div>';
     }
-    $reason_target_id = !empty($rows[0]['ID']) ? (int)$rows[0]['ID'] : 0;
-    $reason_options = class_exists('EUM_Profiles') ? EUM_Profiles::reason_options_for_actor($actor_user_id, $reason_target_id) : [];
+    $reason_options = [];
+    if (class_exists('EUM_Profiles')) {
+      foreach ($rows as $row) {
+        $reason_target_id = (int)($row['ID'] ?? 0);
+        if ($reason_target_id <= 0) continue;
+        foreach (EUM_Profiles::reason_options_for_actor($actor_user_id, $reason_target_id) as $reason) {
+          if (!in_array($reason, $reason_options, true)) $reason_options[] = $reason;
+        }
+      }
+    }
     echo '<label style="display:block;margin:0 0 14px;"><strong>Change reason</strong><br><select name="bulk_reason" style="min-width:280px;max-width:520px;"><option value="">— Select a reason for the changes —</option>';
     foreach ($reason_options as $reason) echo '<option value="' . esc_attr($reason) . '">' . esc_html($reason) . '</option>';
     echo '</select><span class="description" style="display:block;margin-top:4px;">One reason is applied to every selected change.</span></label>';
