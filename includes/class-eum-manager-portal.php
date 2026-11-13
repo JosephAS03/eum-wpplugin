@@ -401,6 +401,7 @@ class EUM_Manager_Portal {
         echo $this->render_employee_bulk_login_redirect_controls(get_current_user_id(), $rows);
         echo $this->render_team_bulk_edit_panel(get_current_user_id(), $rows, $bulk_form_id);
         echo $this->render_employee_meta_bulk_panel(get_current_user_id(), $rows);
+        echo $this->render_employee_public_override_bulk_panel(get_current_user_id(), $rows);
         echo $this->render_directory_table('Employee List', $rows, true, true, true);
         echo '</form>';
       } elseif ($mode === 'terminated') {
@@ -786,7 +787,17 @@ class EUM_Manager_Portal {
     $class = 'notice notice-success';
     if ($type === 'error') $class = 'notice notice-error';
     elseif ($type === 'warning') $class = 'notice notice-warning';
-    return '<div class="' . esc_attr($class) . '" data-eum-team-bulk-notice="1" data-eum-notice-type="' . esc_attr($type) . '"><p>' . esc_html($msg) . '</p></div>';
+    $html = '<div class="' . esc_attr($class) . '" data-eum-team-bulk-notice="1" data-eum-notice-type="' . esc_attr($type) . '"><p>' . esc_html($msg) . '</p></div>';
+    $token = isset($_GET['eum_public_rules_report']) ? sanitize_key(wp_unslash((string)$_GET['eum_public_rules_report'])) : '';
+    if (preg_match('/^[a-z0-9]{32}$/', $token)) {
+      $actor_user_id = (int)get_current_user_id();
+      $stored = get_transient('eum_public_rules_bulk_' . $actor_user_id . '_' . $token);
+      if (is_array($stored) && (int)($stored['owner_user_id'] ?? 0) === $actor_user_id) {
+        $html .= $this->render_employee_public_rules_report((array)($stored['users'] ?? []));
+        delete_transient('eum_public_rules_bulk_' . $actor_user_id . '_' . $token);
+      }
+    }
+    return $html;
   }
 
   private function render_team_email_export_controls(): string {
@@ -905,6 +916,42 @@ class EUM_Manager_Portal {
     echo '<input type="text" name="' . esc_attr($value_name) . '" value="' . esc_attr($value) . '" placeholder="Value" data-eum-meta-value="1">';
     echo '<button type="button" class="button" data-eum-meta-remove="1"' . ($show_remove ? '' : ' hidden') . '>Remove</button>';
     echo '</div>';
+    return ob_get_clean();
+  }
+
+  private function render_employee_public_override_bulk_panel(int $actor_user_id, array $rows): string {
+    if (empty($rows) || !class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id) || !class_exists('EUM_Public_Meta')) return '';
+
+    $reason_options = [];
+    foreach ($rows as $row) {
+      $target_user_id = (int)($row['ID'] ?? 0);
+      if ($target_user_id <= 0) continue;
+      foreach (EUM_Profiles::reason_options_for_actor($actor_user_id, $target_user_id) as $reason) {
+        if (!in_array($reason, $reason_options, true)) $reason_options[] = $reason;
+      }
+    }
+
+    ob_start();
+    echo '<details class="eum-directory__panel eum-directory__public-overrides">';
+    echo '<summary class="eum-directory__panel-head"><strong>Public Metadata Overrides</strong><span>Enable or disable user-specific values for selected employees</span></summary>';
+    echo '<div style="padding:16px;display:grid;gap:12px;">';
+    echo '<p class="description" style="margin:0;">Enable captures each employee’s current public value as a user-specific override. A blank value remains an explicit blank. Disable removes that override and reapplies matching public metadata rules. Group labels continue to be added to Public Labels.</p>';
+    echo '<button type="submit" formnovalidate="formnovalidate" class="button" name="team_bulk_action" value="public_rules_check">Check Rules for Selected Employees</button>';
+    echo '<p class="description" style="margin:0;">Shows which saved rules match and the values each selected user would receive. This preview does not change data.</p>';
+    echo '<fieldset style="border:0;padding:0;margin:0;display:flex;gap:12px 20px;flex-wrap:wrap;"><legend class="screen-reader-text">Public metadata fields</legend>';
+    foreach (EUM_Public_Meta::public_fields() as $key => $field) {
+      echo '<label><input type="checkbox" name="public_override_fields[]" value="' . esc_attr((string)$key) . '"> ' . esc_html((string)($field['label'] ?? $key)) . '</label>';
+    }
+    echo '</fieldset>';
+    if (!empty($reason_options)) {
+      echo '<label style="max-width:520px;"><strong>Reason</strong><select name="public_override_reason" style="display:block;width:100%;margin-top:5px;"><option value="">— Select a reason —</option>';
+      foreach ($reason_options as $reason) echo '<option value="' . esc_attr($reason) . '">' . esc_html($reason) . '</option>';
+      echo '</select></label>';
+    } else {
+      echo '<p class="notice notice-error" style="padding:8px 12px;margin:0;">No change reasons are configured for your account. Configure profile change reasons before applying overrides.</p>';
+    }
+    echo '<div class="eum-directory__filter-actions"><button type="submit" formnovalidate="formnovalidate" class="button button-primary" name="team_bulk_action" value="public_override_enable"' . (empty($reason_options) ? ' disabled' : '') . '>Enable Overrides</button> <button type="submit" formnovalidate="formnovalidate" class="button" name="team_bulk_action" value="public_override_disable"' . (empty($reason_options) ? ' disabled' : '') . '>Disable Overrides</button></div>';
+    echo '</div></details>';
     return ob_get_clean();
   }
 
@@ -1432,14 +1479,21 @@ class EUM_Manager_Portal {
 
     $return_url = isset($_POST['return_url']) ? esc_url_raw((string)wp_unslash($_POST['return_url'])) : $this->current_request_url();
     $selected_ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['selected_user_ids'] ?? [])), static fn($id) => $id > 0)));
-    if (sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? '')) === 'meta_update') {
+    $bulk_action = sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? ''));
+    if ($bulk_action === 'public_rules_check') {
+      $this->handle_employee_public_rules_check($actor_user_id, $selected_ids, $return_url);
+    }
+    if (in_array($bulk_action, ['public_override_enable', 'public_override_disable'], true)) {
+      $this->handle_employee_public_override_bulk($actor_user_id, $selected_ids, $return_url, $bulk_action);
+    }
+    if ($bulk_action === 'meta_update') {
       $this->handle_employee_meta_bulk_update($actor_user_id, $selected_ids, $return_url);
     }
     if (count($selected_ids) < 1) {
       $this->finish_team_bulk_response('Select at least one visible user first.', 'error', $return_url);
     }
 
-    if (sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? '')) === 'email_list') {
+    if ($bulk_action === 'email_list') {
       $this->handle_team_email_list_export($actor_user_id, $selected_ids, $return_url);
     }
     $field_values = $this->parse_team_bulk_payload($actor_user_id);
@@ -1663,6 +1717,159 @@ class EUM_Manager_Portal {
       'eum_meta_restore' => false,
     ], $return_url));
     exit;
+  }
+
+  private function handle_employee_public_rules_check(int $actor_user_id, array $selected_ids, string $return_url): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id)) wp_die('Not allowed.', 'Not allowed', ['response' => 403]);
+    if (!class_exists('EUM_Public_Meta') || sanitize_key((string)wp_unslash($_POST['directory_mode'] ?? '')) !== 'employee') {
+      wp_die('Public metadata rules can only be checked by HR/IT from Employee List.', 'Not allowed', ['response' => 403]);
+    }
+    if (empty($selected_ids)) $this->finish_team_bulk_response('Select at least one employee first.', 'error', $return_url);
+    if (count($selected_ids) > 500) $this->finish_team_bulk_response('Select no more than 500 employees at a time.', 'error', $return_url);
+
+    $limit = max(10, min(500, (int)($_POST['directory_limit'] ?? 100)));
+    $visible_rows = $this->directory_rows_for_email_export('employee', $return_url, $limit);
+    $visible_ids = array_map(static fn($row) => (int)$row['ID'], $visible_rows);
+    if (array_diff($selected_ids, $visible_ids)) {
+      $this->finish_team_bulk_response('One or more selected employees are outside the visible Employee List. Reload the list and try again.', 'error', $return_url);
+    }
+
+    $users = [];
+    foreach ($selected_ids as $target_user_id) {
+      $user = get_userdata((int)$target_user_id);
+      if (!$user) $this->finish_team_bulk_response('A selected employee account could not be found.', 'error', $return_url);
+      $users[] = [
+        'id' => (int)$target_user_id,
+        'name' => (string)($user->display_name ?: $user->user_login),
+        'email' => (string)$user->user_email,
+        'preview' => EUM_Public_Meta::preview_user_rules((int)$target_user_id),
+      ];
+    }
+
+    $token = strtolower(wp_generate_password(32, false, false));
+    set_transient('eum_public_rules_bulk_' . $actor_user_id . '_' . $token, [
+      'owner_user_id' => $actor_user_id,
+      'users' => $users,
+    ], 15 * MINUTE_IN_SECONDS);
+    $target_url = add_query_arg([
+      'eum_public_rules_report' => $token,
+      'eum_team_msg' => sprintf('Checked saved public metadata rules for %d employee(s). No user data was changed.', count($users)),
+      'eum_team_type' => 'success',
+    ], $return_url);
+    wp_safe_redirect(wp_validate_redirect($target_url, home_url('/')));
+    exit;
+  }
+
+  private function render_employee_public_rules_report(array $users): string {
+    ob_start();
+    echo '<details class="eum-directory__panel" open style="margin:12px 0;"><summary class="eum-directory__panel-head"><strong>Public Metadata Rule Check</strong><span>' . (int)count($users) . ' employee(s); preview only</span></summary>';
+    echo '<div style="overflow-x:auto;padding:12px;"><table class="widefat striped"><thead><tr><th>Employee</th><th>Matching rules</th><th>Field values</th></tr></thead><tbody>';
+    foreach ($users as $entry) {
+      if (!is_array($entry)) continue;
+      $preview = is_array($entry['preview'] ?? null) ? $entry['preview'] : [];
+      $rules = array_values(array_filter((array)($preview['rules'] ?? []), 'is_array'));
+      $rule_names = array_map(static fn($rule) => (string)($rule['label'] ?? 'Rule'), $rules);
+      echo '<tr><td><strong>' . esc_html((string)($entry['name'] ?? '')) . '</strong><br><span class="description">' . esc_html((string)($entry['email'] ?? '')) . '</span></td>';
+      echo '<td>' . esc_html(empty($rule_names) ? 'No matching rules' : implode(', ', $rule_names)) . '</td><td>';
+      foreach ((array)($preview['fields'] ?? []) as $field) {
+        if (!is_array($field)) continue;
+        echo '<div><strong>' . esc_html((string)($field['label'] ?? '')) . ':</strong> ' . esc_html((string)($field['current'] ?? '')) . ' → ' . esc_html((string)($field['effective'] ?? '')) . ' <span class="description">(' . esc_html((string)($field['source'] ?? '')) . ')</span></div>';
+      }
+      echo '</td></tr>';
+    }
+    echo '</tbody></table></div></details>';
+    return ob_get_clean();
+  }
+
+  private function handle_employee_public_override_bulk(int $actor_user_id, array $selected_ids, string $return_url, string $action): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id)) wp_die('Not allowed.', 'Not allowed', ['response' => 403]);
+    if (!class_exists('EUM_Public_Meta') || sanitize_key((string)wp_unslash($_POST['directory_mode'] ?? '')) !== 'employee') {
+      wp_die('Public metadata overrides can only be managed by HR/IT from Employee List.', 'Not allowed', ['response' => 403]);
+    }
+    if (empty($selected_ids)) $this->finish_team_bulk_response('Select at least one employee first.', 'error', $return_url);
+    if (count($selected_ids) > 500) $this->finish_team_bulk_response('Select no more than 500 employees at a time.', 'error', $return_url);
+
+    $fields_posted = [];
+    if (isset($_POST['public_override_fields']) && is_array($_POST['public_override_fields'])) {
+      foreach ($_POST['public_override_fields'] as $field) {
+        if (!is_scalar($field)) {
+          $this->finish_team_bulk_response('Choose one or more valid public metadata fields.', 'error', $return_url);
+        }
+        $fields_posted[] = sanitize_key((string)wp_unslash($field));
+      }
+    }
+    $fields = array_values(array_unique(array_filter($fields_posted, static fn($field) => EUM_Public_Meta::is_public_meta_key($field))));
+    if (empty($fields) || count($fields) !== count(array_unique($fields_posted))) {
+      $this->finish_team_bulk_response('Choose one or more valid public metadata fields.', 'error', $return_url);
+    }
+
+    $reason = sanitize_text_field((string)wp_unslash($_POST['public_override_reason'] ?? ''));
+    if ($reason === '') $this->finish_team_bulk_response('Select a reason for this override change.', 'error', $return_url);
+    $limit = max(10, min(500, (int)($_POST['directory_limit'] ?? 100)));
+    $visible_rows = $this->directory_rows_for_email_export('employee', $return_url, $limit);
+    $visible_ids = array_map(static fn($row) => (int)$row['ID'], $visible_rows);
+    if (array_diff($selected_ids, $visible_ids)) {
+      $this->finish_team_bulk_response('One or more selected employees are outside the visible Employee List. Reload the list and try again.', 'error', $return_url);
+    }
+    foreach ($selected_ids as $target_user_id) {
+      if (!get_userdata((int)$target_user_id)) $this->finish_team_bulk_response('A selected employee account could not be found.', 'error', $return_url);
+      $valid_reasons = class_exists('EUM_Profiles') ? EUM_Profiles::reason_options_for_actor($actor_user_id, (int)$target_user_id) : [];
+      if (!in_array($reason, $valid_reasons, true)) {
+        $this->finish_team_bulk_response('The selected reason is not valid for every selected employee.', 'error', $return_url);
+      }
+    }
+
+    $enabled = $action === 'public_override_enable';
+    $changed_users = 0;
+    $processed_users = 0;
+    $sync_changed_users = 0;
+    $errors = [];
+    foreach ($selected_ids as $target_user_id) {
+      try {
+        $overrides = get_user_meta((int)$target_user_id, EUM_Public_Meta::USER_OVERRIDES_META, true);
+        if (!is_array($overrides)) $overrides = [];
+        $before = $overrides;
+        $preview = $enabled ? EUM_Public_Meta::preview_user_rules((int)$target_user_id) : [];
+        foreach ($fields as $key) {
+          if ($enabled) {
+            $field_preview = (array)($preview['fields'][$key] ?? []);
+            $overrides[$key] = EUM_Public_Meta::sanitize_value($key, $field_preview['base_value'] ?? '');
+          } else {
+            unset($overrides[$key]);
+          }
+        }
+        $overrides_changed = $before !== $overrides;
+        if ($overrides_changed) {
+          if (empty($overrides)) delete_user_meta((int)$target_user_id, EUM_Public_Meta::USER_OVERRIDES_META);
+          else update_user_meta((int)$target_user_id, EUM_Public_Meta::USER_OVERRIDES_META, $overrides);
+          $changed_users++;
+        }
+        $sync_changed = EUM_Public_Meta::sync_user((int)$target_user_id);
+        if ($sync_changed) $sync_changed_users++;
+        if ($overrides_changed || $sync_changed) {
+          $this->record_bulk_change_entry((int)$target_user_id, $actor_user_id, [
+            'public_override_action' => $enabled ? 'enabled' : 'disabled',
+            'public_override_fields' => $fields,
+          ], $reason, false, true);
+        }
+        $processed_users++;
+      } catch (Throwable $e) {
+        $detail = sanitize_text_field($e->getMessage());
+        if ($detail === '') $detail = 'The server returned no error description.';
+        if (function_exists('eum_log_message')) {
+          eum_log_message('[EUM Public Overrides] Bulk update failed for user #' . (int)$target_user_id . ' (' . get_class($e) . '): ' . $detail);
+        }
+        $errors[] = '#' . (int)$target_user_id . ': ' . get_class($e) . ': ' . substr($detail, 0, 240);
+      }
+    }
+
+    $label = $enabled ? 'Enabled' : 'Disabled';
+    $parts = [];
+    if ($processed_users > 0 || $changed_users > 0 || $sync_changed_users > 0) {
+      $parts[] = sprintf('%s selected public override fields; completed for %d employee(s), stored overrides changed for %d, and resolved public values changed for %d.', $label, $processed_users, $changed_users, $sync_changed_users);
+    }
+    if (!empty($errors)) $parts[] = implode(' | ', array_slice($errors, 0, 3));
+    $this->finish_team_bulk_response(implode(' ', $parts) ?: 'No override changes were applied.', empty($errors) ? 'success' : 'warning', $return_url);
   }
 
   private function prepare_employee_meta_value(string $key, string $raw_value, string $kind) {

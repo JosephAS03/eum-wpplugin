@@ -22,6 +22,69 @@ class EUM_Public_Meta {
     ];
   }
 
+  public static function public_fields(): array {
+    return self::fields();
+  }
+
+  public static function preview_user_rules(int $user_id): array {
+    $user_id = (int)$user_id;
+    if ($user_id <= 0 || !get_user_by('id', $user_id)) return ['user_id' => $user_id, 'rules' => [], 'fields' => []];
+
+    $rule_values = [];
+    $rule_sources = [];
+    $timestamps = [];
+    $matched_rules = [];
+    foreach (self::conditional_rules() as $index => $rule) {
+      $conditions = is_array($rule['conditions'] ?? null) ? $rule['conditions'] : [];
+      $metadata = is_array($rule['metadata'] ?? null) ? $rule['metadata'] : [];
+      if (!self::conditions_match_user($user_id, $conditions)) continue;
+      $rule_id = sanitize_text_field((string)($rule['id'] ?? ''));
+      $rule_label = $rule_id !== '' ? 'Rule ' . substr($rule_id, 0, 8) : 'Rule ' . ((int)$index + 1);
+      $matched_rules[] = ['id' => $rule_id, 'label' => $rule_label, 'updated_at' => (float)($rule['updated_at'] ?? 0)];
+      $updated_at = (float)($rule['updated_at'] ?? 0);
+      foreach ($metadata as $key => $value) {
+        $key = sanitize_key((string)$key);
+        if (!self::is_public_meta_key($key)) continue;
+        if (!array_key_exists($key, $timestamps) || $updated_at >= $timestamps[$key]) {
+          $rule_values[$key] = self::sanitize_value($key, $value);
+          $rule_sources[$key] = $rule_label;
+          $timestamps[$key] = $updated_at;
+        }
+      }
+    }
+
+    $overrides = get_user_meta($user_id, self::USER_OVERRIDES_META, true);
+    if (!is_array($overrides)) $overrides = [];
+    $preview_fields = [];
+    foreach (self::fields() as $key => $definition) {
+      $current_exists = metadata_exists('user', $user_id, $key);
+      $current = $current_exists ? self::sanitize_value($key, get_user_meta($user_id, $key, true)) : '';
+      $override_enabled = array_key_exists($key, $overrides);
+      $override_value = $override_enabled ? self::sanitize_value($key, $overrides[$key]) : '';
+      $has_rule = array_key_exists($key, $rule_values);
+      $effective = $override_enabled ? $override_value : ($has_rule ? $rule_values[$key] : $current);
+      $source = $override_enabled ? 'User override' : ($has_rule ? $rule_sources[$key] : 'No matching rule; current value stays as-is');
+      $base_value = $effective;
+      if ($key === 'public_labels') {
+        $group_labels = implode(', ', self::group_labels_for_user($user_id));
+        $base = $override_enabled ? $override_value : ($has_rule ? $rule_values[$key] : (string)get_user_meta($user_id, self::LABELS_BASE_META, true));
+        if ($base === '' && !$override_enabled && !$has_rule) $base = $current;
+        $base_value = self::sanitize_value('public_labels', $base);
+        $effective = self::merge_labels($base, $group_labels);
+      }
+      $preview_fields[$key] = [
+        'label' => (string)($definition['label'] ?? $key),
+        'current' => $current_exists ? $current : '(not set)',
+        'base_value' => $base_value,
+        'source' => $source,
+        'effective' => $effective,
+        'would_change' => $effective !== $current,
+        'override_enabled' => $override_enabled,
+      ];
+    }
+    return ['user_id' => $user_id, 'rules' => $matched_rules, 'fields' => $preview_fields];
+  }
+
   public function init(): void {
     add_action('admin_menu', [$this, 'admin_menu'], 55);
     add_action('init', [$this, 'maybe_migrate_profile_fields'], 30);
@@ -32,6 +95,7 @@ class EUM_Public_Meta {
     add_action('admin_post_eum_public_meta_save_rules', [$this, 'handle_rules_save']);
     add_action('admin_post_eum_public_meta_bulk_sync', [$this, 'handle_bulk_sync']);
     add_action('admin_post_eum_public_meta_bulk_sync_rule', [$this, 'handle_rule_bulk_sync']);
+    add_action('admin_post_eum_public_meta_check_user_rules', [$this, 'handle_user_rule_check']);
     add_action('added_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('updated_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('deleted_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
@@ -148,7 +212,8 @@ class EUM_Public_Meta {
     if ($user_id <= 0) return;
     $values = self::values_for_user($user_id);
 
-    echo '<h2>Public Metadata</h2>';
+    echo '<h2 id="eum-public-metadata">Public Metadata</h2>';
+    $this->render_user_rule_check_notice($user_id);
     echo '<p>Check a field to set a user-specific value. Unchecked fields continue to follow matching rules. User-specific values take priority over rules; Group labels are still added to Public Labels. A checked blank value clears its base value; Group labels remain additive.</p>';
     wp_nonce_field('eum_public_meta_profile_' . $user_id, 'eum_public_meta_profile_nonce');
     echo '<table class="form-table" role="presentation"><tbody>';
@@ -162,6 +227,9 @@ class EUM_Public_Meta {
       echo '</td></tr>';
     }
     echo '</tbody></table>';
+    $check_url = add_query_arg(['action' => 'eum_public_meta_check_user_rules', 'user_id' => $user_id], admin_url('admin-post.php'));
+    $check_url = wp_nonce_url($check_url, 'eum_public_meta_check_user_rules_' . $user_id);
+    echo '<p><a class="button" href="' . esc_url($check_url) . '">Check Rules</a> <span class="description">Preview matching rules and resulting values. This does not save changes.</span></p>';
   }
 
   public function save_user_settings_metadata(int $user_id): void {
@@ -173,6 +241,46 @@ class EUM_Public_Meta {
       self::save_profile_override($user_id, $key, is_array($posted[$key] ?? null) ? $posted[$key] : []);
     }
     self::sync_user($user_id);
+  }
+
+  public function handle_user_rule_check(): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.', 'Not allowed', ['response' => 403]);
+    $user_id = isset($_GET['user_id']) ? absint($_GET['user_id']) : 0;
+    if ($user_id <= 0 || !get_user_by('id', $user_id) || !current_user_can('edit_user', $user_id)) wp_die('User not found or not allowed.', 'Not allowed', ['response' => 403]);
+    check_admin_referer('eum_public_meta_check_user_rules_' . $user_id);
+    $actor_user_id = (int)get_current_user_id();
+    $token = strtolower(wp_generate_password(32, false, false));
+    set_transient('eum_public_meta_user_check_' . $actor_user_id . '_' . $token, [
+      'owner_user_id' => $actor_user_id,
+      'target_user_id' => $user_id,
+      'report' => self::preview_user_rules($user_id),
+    ], 15 * MINUTE_IN_SECONDS);
+    $profile_url = $user_id === $actor_user_id ? admin_url('profile.php') : admin_url('user-edit.php?user_id=' . $user_id);
+    wp_safe_redirect(add_query_arg('eum_public_meta_rule_check', $token, $profile_url) . '#eum-public-metadata');
+    exit;
+  }
+
+  private function render_user_rule_check_notice(int $user_id): void {
+    $token = isset($_GET['eum_public_meta_rule_check']) ? sanitize_key(wp_unslash((string)$_GET['eum_public_meta_rule_check'])) : '';
+    if (!preg_match('/^[a-z0-9]{32}$/', $token)) return;
+    $actor_user_id = (int)get_current_user_id();
+    $stored = get_transient('eum_public_meta_user_check_' . $actor_user_id . '_' . $token);
+    if (!is_array($stored) || (int)($stored['owner_user_id'] ?? 0) !== $actor_user_id || (int)($stored['target_user_id'] ?? 0) !== $user_id) return;
+    $report = is_array($stored['report'] ?? null) ? $stored['report'] : [];
+    $rules = array_values(array_filter((array)($report['rules'] ?? []), 'is_array'));
+    echo '<div class="notice notice-info inline" style="margin:12px 0;padding:10px 12px;"><p><strong>Rule check preview</strong> — ' . (int)count($rules) . ' matching rule(s). No values were changed.</p>';
+    if (!empty($rules)) {
+      echo '<p>Matching: ' . esc_html(implode(', ', array_map(static fn($rule) => (string)($rule['label'] ?? 'Rule'), $rules))) . '</p>';
+    } else {
+      echo '<p>No conditional public metadata rules match this user.</p>';
+    }
+    echo '<div style="overflow-x:auto"><table class="widefat striped"><thead><tr><th>Field</th><th>Current value</th><th>Value after sync</th><th>Source</th></tr></thead><tbody>';
+    foreach ((array)($report['fields'] ?? []) as $field) {
+      if (!is_array($field)) continue;
+      echo '<tr><td>' . esc_html((string)($field['label'] ?? '')) . '</td><td>' . esc_html((string)($field['current'] ?? '')) . '</td><td>' . esc_html((string)($field['effective'] ?? '')) . '</td><td>' . esc_html((string)($field['source'] ?? '')) . '</td></tr>';
+    }
+    echo '</tbody></table></div></div>';
+    delete_transient('eum_public_meta_user_check_' . $actor_user_id . '_' . $token);
   }
 
   public static function sync_user(int $user_id): bool {

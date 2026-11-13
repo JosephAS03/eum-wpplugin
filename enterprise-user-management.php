@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Enterprise User Management
  * Description: Enterprise-grade user meta, personnel files, user groups, job/location paths, projects, managers, and bulk import/export and auditing tools.
- * Version: 0.7.111-rebuild
+ * Version: 0.7.112-rebuild
  * Author: JAS Enterprises
  */
 
@@ -20,7 +20,7 @@ if (!function_exists('str_starts_with')) {
   }
 }
 
-define('EUM_VERSION', '0.7.111-rebuild');
+define('EUM_VERSION', '0.7.112-rebuild');
 define('EUM_PLUGIN_FILE', __FILE__);
 define('EUM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('EUM_PLUGIN_URL', plugin_dir_url(__FILE__));
