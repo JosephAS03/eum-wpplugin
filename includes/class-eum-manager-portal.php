@@ -322,7 +322,7 @@ class EUM_Manager_Portal {
       && !is_array($_GET['eum_include_terminated'])
       && $this->is_truthy((string)wp_unslash($_GET['eum_include_terminated']));
     $is_standalone = $this->is_truthy($atts['standalone'] ?? '1');
-    $current_url = $this->current_request_url();
+    $current_url = remove_query_arg('eum_meta_restore', $this->current_request_url());
 
     if ($is_standalone) {
       if ((string)$atts['profile_page_url'] === '') $atts['profile_page_url'] = $current_url;
@@ -399,6 +399,8 @@ class EUM_Manager_Portal {
         wp_nonce_field('eum_manager_team_bulk_edit', 'eum_manager_team_bulk_nonce');
         echo $this->render_team_email_export_controls();
         echo $this->render_employee_bulk_login_redirect_controls(get_current_user_id(), $rows);
+        echo $this->render_team_bulk_edit_panel(get_current_user_id(), $rows, $bulk_form_id);
+        echo $this->render_employee_meta_bulk_panel(get_current_user_id(), $rows);
         echo $this->render_directory_table('Employee List', $rows, true, true, true);
         echo '</form>';
       } elseif ($mode === 'terminated') {
@@ -744,7 +746,7 @@ class EUM_Manager_Portal {
     echo '<option value="bosses_personal">Bosses’ personal emails (unique)</option>';
     echo '<option value="users_company">Selected users’ company emails</option>';
     echo '</select></label>';
-    echo '<button type="submit" class="button button-primary" name="team_bulk_action" value="email_list">Create comma-separated list</button>';
+    echo '<button type="submit" formnovalidate="formnovalidate" class="button button-primary" name="team_bulk_action" value="email_list">Create comma-separated list</button>';
     echo '<p class="description">Select people in the table, then copy the generated list into your email software. Duplicate addresses are removed.</p>';
     echo '</div></section>';
     return ob_get_clean();
@@ -778,6 +780,135 @@ class EUM_Manager_Portal {
     echo '<div class="eum-directory__filter-actions"><button type="submit" class="button button-primary">Apply to Selected Employees</button></div>';
     echo '</div></section>';
     return ob_get_clean();
+  }
+
+  private function render_employee_meta_bulk_panel(int $actor_user_id, array $rows): string {
+    if (empty($rows) || !class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id)) return '';
+
+    $catalog = $this->employee_meta_key_catalog();
+    $keys = array_keys($catalog);
+    $list_id = 'eum-employee-meta-keys-' . wp_rand(1000, 999999);
+    $restore_token = isset($_GET['eum_meta_restore']) ? sanitize_key(wp_unslash((string)$_GET['eum_meta_restore'])) : '';
+    $restore = [];
+    $restore_reason = '';
+    $restore_open = false;
+    if (preg_match('/^[a-z0-9]{32}$/', $restore_token)) {
+      $stored = get_transient('eum_employee_meta_restore_' . $actor_user_id . '_' . $restore_token);
+      if (is_array($stored) && (int)($stored['owner_user_id'] ?? 0) === $actor_user_id) {
+        $restore = array_values(array_filter((array)($stored['pairs'] ?? []), 'is_array'));
+        $restore_reason = sanitize_text_field((string)($stored['reason'] ?? ''));
+        $restore_open = true;
+      }
+    }
+    if (empty($restore)) $restore = [['key' => '', 'value' => '']];
+    $types_json = wp_json_encode($catalog);
+    $reason_options = [];
+    foreach ($rows as $row) {
+      $target_user_id = (int)($row['ID'] ?? 0);
+      if ($target_user_id <= 0) continue;
+      foreach (EUM_Profiles::reason_options_for_actor($actor_user_id, $target_user_id) as $reason) {
+        if (!in_array($reason, $reason_options, true)) $reason_options[] = $reason;
+      }
+    }
+
+    ob_start();
+    echo '<details class="eum-directory__panel eum-directory__meta-bulk" data-eum-meta-editor="1"' . ($restore_open ? ' open' : '') . '>';
+    echo '<summary class="eum-directory__panel-head"><strong>HR/IT User Metadata</strong><span>Apply values to selected employees</span></summary>';
+    echo '<div style="padding:16px;display:grid;gap:14px;">';
+    echo '<p class="description" style="margin:0;">Choose a user meta key and enter its value. Registered field types and common ID fields are checked before anything is saved. Leave a value blank to clear it. Login, permission, termination, and manager workflow fields are protected; use their dedicated bulk controls.</p>';
+    echo '<datalist id="' . esc_attr($list_id) . '">';
+    foreach ($keys as $key) echo '<option value="' . esc_attr($key) . '"></option>';
+    echo '</datalist>';
+    echo '<div data-eum-meta-pairs="1" data-eum-meta-next-index="' . count($restore) . '" data-eum-meta-types="' . esc_attr((string)$types_json) . '" data-eum-meta-list="' . esc_attr($list_id) . '" style="display:grid;gap:8px;">';
+    foreach ($restore as $index => $pair) {
+      $key_value = is_scalar($pair['key'] ?? null) ? (string)$pair['key'] : '';
+      $meta_value = is_scalar($pair['value'] ?? null) ? (string)$pair['value'] : '';
+      echo $this->render_employee_meta_pair_row((int)$index, $key_value, $meta_value, $list_id, count($restore) > 1);
+    }
+    echo '</div>';
+    echo '<template data-eum-meta-row-template="1">' . $this->render_employee_meta_pair_row('__INDEX__', '', '', $list_id, true) . '</template>';
+    echo '<button type="button" class="button" data-eum-meta-add="1" style="justify-self:start;">Add meta field</button>';
+    echo '<p class="description" data-eum-meta-kind-help="1" style="margin:0;">Field suggestions appear as you type. ID fields accept numeric IDs; registered arrays and objects accept JSON.</p>';
+    if (!empty($reason_options)) {
+      echo '<label style="max-width:520px;"><strong>Reason</strong><select name="employee_meta_reason" required style="display:block;width:100%;margin-top:5px;"><option value="">— Select a reason —</option>';
+      foreach ($reason_options as $reason) echo '<option value="' . esc_attr($reason) . '"' . selected($restore_reason, $reason, false) . '>' . esc_html($reason) . '</option>';
+      echo '</select><span class="description">One reason is recorded for the metadata changes on each selected user.</span></label>';
+    } else {
+      echo '<p class="notice notice-error" style="padding:8px 12px;margin:0;">No change reasons are configured for your account. Configure profile change reasons before applying metadata.</p>';
+    }
+      echo '<div class="eum-directory__filter-actions"><span data-eum-meta-selected-count="1">0 selected</span><button type="submit" formnovalidate="formnovalidate" class="button button-primary" name="team_bulk_action" value="meta_update" data-eum-meta-submit="1"' . (empty($reason_options) ? ' disabled' : '') . '>Apply Metadata to Selected Employees</button></div>';
+    echo '</div></details>';
+    echo '<style>.eum-directory__meta-bulk>summary{cursor:pointer;list-style:none}.eum-directory__meta-bulk>summary::-webkit-details-marker{display:none}.eum-directory__meta-bulk>summary:after{content:"+";font-size:18px;font-weight:700}.eum-directory__meta-bulk[open]>summary:after{content:"−"}.eum-directory__meta-pair{display:grid;grid-template-columns:minmax(180px,1fr) minmax(220px,2fr) auto;gap:8px;align-items:center}.eum-directory__meta-pair input{width:100%;min-width:0}@media(max-width:680px){.eum-directory__meta-pair{grid-template-columns:1fr}.eum-directory__meta-pair .button{justify-self:start}}</style>';
+    return ob_get_clean();
+  }
+
+  private function render_employee_meta_pair_row($index, string $key, string $value, string $list_id, bool $show_remove): string {
+    $key_name = 'employee_meta_pairs[' . $index . '][key]';
+    $value_name = 'employee_meta_pairs[' . $index . '][value]';
+    ob_start();
+    echo '<div class="eum-directory__meta-pair" data-eum-meta-row="1">';
+    echo '<input type="text" name="' . esc_attr($key_name) . '" value="' . esc_attr($key) . '" list="' . esc_attr($list_id) . '" placeholder="User metadata field" autocomplete="off" data-eum-meta-key="1">';
+    echo '<input type="text" name="' . esc_attr($value_name) . '" value="' . esc_attr($value) . '" placeholder="Value" data-eum-meta-value="1">';
+    echo '<button type="button" class="button" data-eum-meta-remove="1"' . ($show_remove ? '' : ' hidden') . '>Remove</button>';
+    echo '</div>';
+    return ob_get_clean();
+  }
+
+  private function employee_meta_key_catalog(): array {
+    global $wpdb;
+    $catalog = [];
+    if (isset($wpdb->usermeta)) {
+      $stored_keys = $wpdb->get_col("SELECT DISTINCT meta_key FROM {$wpdb->usermeta} WHERE meta_key <> '' ORDER BY meta_key");
+      foreach ((array)$stored_keys as $key) {
+        $key = (string)$key;
+        $catalog[$key] = $this->employee_meta_value_kind($key);
+      }
+      $stored_shapes = $wpdb->get_results("SELECT meta_key, MIN(LEFT(meta_value, 1)) AS value_prefix FROM {$wpdb->usermeta} WHERE meta_value LIKE 'a:%' OR meta_value LIKE 'O:%' GROUP BY meta_key", ARRAY_A);
+      foreach ((array)$stored_shapes as $shape) {
+        $key = (string)($shape['meta_key'] ?? '');
+        if ($key !== '' && ($catalog[$key] ?? 'text') === 'text') $catalog[$key] = 'json';
+      }
+    }
+    if (function_exists('get_registered_meta_keys')) {
+      foreach ((array)get_registered_meta_keys('user') as $key => $definition) {
+        $catalog[(string)$key] = $this->employee_meta_value_kind((string)$key, (string)($definition['type'] ?? ''));
+      }
+    }
+    if (class_exists('EUM_Fields')) {
+      foreach (EUM_Fields::get_definitions() as $definition) {
+        $key = sanitize_key((string)($definition['key'] ?? ''));
+        if ($key === '') continue;
+        $catalog['custom:' . $key] = $this->employee_meta_value_kind('custom:' . $key, (string)($definition['type'] ?? 'text'));
+      }
+    }
+    if (class_exists('EUM_Public_Meta')) {
+      foreach (['public_nickname', 'public_jobtitle', 'public_division', 'public_labels'] as $key) {
+        $catalog[$key] = 'text';
+      }
+    }
+    ksort($catalog, SORT_NATURAL | SORT_FLAG_CASE);
+    return $catalog;
+  }
+
+  private function employee_meta_value_kind(string $key, string $registered_type = ''): string {
+    if (str_starts_with($key, 'custom:') && class_exists('EUM_Fields')) {
+      $custom_key = substr($key, 7);
+      foreach (EUM_Fields::get_definitions() as $definition) {
+        if (sanitize_key((string)($definition['key'] ?? '')) !== $custom_key) continue;
+        $type = sanitize_key((string)($definition['type'] ?? 'text'));
+        return in_array($type, ['email', 'url', 'number', 'date'], true) ? $type : 'text';
+      }
+      return 'text';
+    }
+    if (class_exists('EUM_Fields') && $key === EUM_Fields::USER_META_KEY) return 'json_object';
+    if ($key !== 'employee_id' && preg_match('/(?:^|_)(?:id|ids|user_id|term_id|post_id|attachment_id)$/i', $key)) return 'id';
+    if (in_array($registered_type, ['array', 'object'], true)) return $registered_type === 'array' ? 'json_array' : 'json_object';
+    if ($registered_type === 'boolean') return 'boolean';
+    if ($registered_type === 'integer') return 'integer';
+    if (in_array($registered_type, ['number', 'float'], true)) return 'number';
+    if ($registered_type === 'email') return 'email';
+    if ($registered_type === 'url') return 'url';
+    return 'text';
   }
 
   private function render_email_list_result(): string {
@@ -958,7 +1089,7 @@ class EUM_Manager_Portal {
     }
     echo '<div class="eum-directory__filter-actions eum-team-bulk-modal__actions">';
     echo '<button type="button" class="button" data-eum-team-bulk-close="1">Cancel</button>';
-    echo '<button type="submit" class="button button-primary">Apply Changes to Selected Users</button>';
+    echo '<button type="submit" formnovalidate="formnovalidate" class="button button-primary">Apply Changes to Selected Users</button>';
     echo '</div>';
     echo '</div></div></div>';
     return ob_get_clean();
@@ -1231,6 +1362,9 @@ class EUM_Manager_Portal {
 
     $return_url = isset($_POST['return_url']) ? esc_url_raw((string)wp_unslash($_POST['return_url'])) : $this->current_request_url();
     $selected_ids = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['selected_user_ids'] ?? [])), static fn($id) => $id > 0)));
+    if (sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? '')) === 'meta_update') {
+      $this->handle_employee_meta_bulk_update($actor_user_id, $selected_ids, $return_url);
+    }
     if (count($selected_ids) < 1) {
       wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Select at least one visible user first.', 'eum_team_type' => 'error'], $return_url));
       exit;
@@ -1239,7 +1373,6 @@ class EUM_Manager_Portal {
     if (sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? '')) === 'email_list') {
       $this->handle_team_email_list_export($actor_user_id, $selected_ids, $return_url);
     }
-
     $field_values = $this->parse_team_bulk_payload($actor_user_id);
     $reason = sanitize_text_field((string)($_POST['bulk_reason'] ?? $_POST['bulk_profile_reason'] ?? $_POST['bulk_termination_reason'] ?? ''));
     $has_employment_changes = array_key_exists('employment:terminated', $field_values) || array_key_exists('employment:rehirable', $field_values);
@@ -1336,6 +1469,200 @@ class EUM_Manager_Portal {
     $type = !empty($errors) ? 'warning' : 'success';
     wp_safe_redirect(add_query_arg(['eum_team_msg' => implode(' ', $parts), 'eum_team_type' => $type], $return_url));
     exit;
+  }
+
+  private function handle_employee_meta_bulk_update(int $actor_user_id, array $selected_ids, string $return_url): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id)) wp_die('Not allowed.', 'Not allowed', ['response' => 403]);
+    if (sanitize_key((string)wp_unslash($_POST['directory_mode'] ?? '')) !== 'employee') {
+      wp_die('This metadata editor is available only from Employee List.', 'Not allowed', ['response' => 403]);
+    }
+    $pairs_posted = isset($_POST['employee_meta_pairs']) && is_array($_POST['employee_meta_pairs']) ? wp_unslash($_POST['employee_meta_pairs']) : [];
+    $reason_input = sanitize_text_field((string)wp_unslash($_POST['employee_meta_reason'] ?? ''));
+    $pairs = [];
+    foreach ($pairs_posted as $pair) {
+      if (!is_array($pair)) continue;
+      $pairs[] = [
+        'key' => is_scalar($pair['key'] ?? null) ? (string)$pair['key'] : '',
+        'value' => is_scalar($pair['value'] ?? null) ? (string)$pair['value'] : '',
+      ];
+    }
+    if (empty($pairs)) $pairs = [['key' => '', 'value' => '']];
+    $fail = function(string $message) use ($actor_user_id, $pairs, $reason_input, $return_url): void {
+      $token = strtolower(wp_generate_password(32, false, false));
+      set_transient('eum_employee_meta_restore_' . $actor_user_id . '_' . $token, [
+        'owner_user_id' => $actor_user_id,
+        'pairs' => $pairs,
+        'reason' => $reason_input,
+      ], 15 * MINUTE_IN_SECONDS);
+      wp_safe_redirect(add_query_arg([
+        'eum_meta_restore' => $token,
+        'eum_team_msg' => $message . ' Your entries have been kept below.',
+        'eum_team_type' => 'error',
+      ], $return_url));
+      exit;
+    };
+
+    if (empty($selected_ids)) $fail('Select at least one employee first.');
+    if (count($selected_ids) > 500) $fail('Select no more than 500 employees at a time.');
+    $limit = max(10, min(500, (int)($_POST['directory_limit'] ?? 100)));
+    $visible_rows = $this->directory_rows_for_email_export('employee', $return_url, $limit);
+    $visible_ids = array_map(static fn($row) => (int)$row['ID'], $visible_rows);
+    if (array_diff($selected_ids, $visible_ids)) {
+      $fail('One or more selected employees are outside the visible Employee List. Reload the list and try again.');
+    }
+
+    if (count($pairs) > 25) $fail('Add no more than 25 metadata fields at a time.');
+    $catalog = $this->employee_meta_key_catalog();
+    $prepared = [];
+    $seen_keys = [];
+    foreach ($pairs as $pair) {
+      $key = trim((string)$pair['key']);
+      $value = (string)$pair['value'];
+      if ($key === '' && trim($value) === '') continue;
+      if ($key === '') $fail('Enter a metadata field for every value.');
+      $known_key = array_key_exists($key, $catalog);
+      if (strlen($key) > 255 || preg_match('/[\x00-\x1F\x7F]/', $key) || (!$known_key && !preg_match('/^[A-Za-z0-9_.:-]+$/', $key))) {
+        $fail('Choose a metadata field from the suggestions or use letters, numbers, underscores, periods, colons, and hyphens.');
+      }
+      $key_id = strtolower($key);
+      if (isset($seen_keys[$key_id])) $fail('Use each metadata field only once in a single update.');
+      $seen_keys[$key_id] = true;
+      $value_kind = $catalog[$key] ?? $this->employee_meta_value_kind($key);
+      $result = $this->prepare_employee_meta_value($key, $value, $value_kind);
+      if (is_wp_error($result)) $fail($key . ': ' . $result->get_error_message());
+      $prepared[] = ['key' => $key, 'value' => $result, 'kind' => $value_kind];
+    }
+    if (empty($prepared)) $fail('Add at least one metadata field and value.');
+
+    $reason = $reason_input;
+    if ($reason === '') $fail('Select a reason for this metadata update.');
+    foreach ($selected_ids as $target_user_id) {
+      if (!get_userdata((int)$target_user_id)) $fail('A selected employee account could not be found.');
+      $valid_reasons = class_exists('EUM_Profiles') ? EUM_Profiles::reason_options_for_actor($actor_user_id, (int)$target_user_id) : [];
+      if (!in_array($reason, $valid_reasons, true)) $fail('The selected reason is not valid for every selected employee.');
+    }
+
+    foreach ($selected_ids as $target_user_id) {
+      $audit_values = [];
+      foreach ($prepared as $pair) {
+        $key = $pair['key'];
+        $value = $pair['value'];
+        if (str_starts_with($key, 'custom:')) {
+          $custom_key = substr($key, 7);
+          $custom_fields = (array)get_user_meta((int)$target_user_id, EUM_Fields::USER_META_KEY, true);
+          if ($value === '') unset($custom_fields[$custom_key]);
+          else $custom_fields[$custom_key] = $value;
+          update_user_meta((int)$target_user_id, EUM_Fields::USER_META_KEY, $custom_fields);
+          $audit_values[$key] = $value;
+        } else {
+          if ($value === '') delete_user_meta((int)$target_user_id, $key);
+          else update_user_meta((int)$target_user_id, $key, $value);
+          $audit_values['user_meta:' . $key] = $value;
+        }
+      }
+      try {
+        $this->record_bulk_change_entry((int)$target_user_id, $actor_user_id, $audit_values, $reason, false, true);
+      } catch (Throwable $e) {
+        if (function_exists('eum_log_message')) eum_log_message('[EUM Employee Metadata] Audit write failed for user #' . (int)$target_user_id . ': ' . $e->getMessage());
+      }
+      if (class_exists('EUM_Site_Manager') && method_exists('EUM_Site_Manager', 'queue_user_sync_for_user')) {
+        EUM_Site_Manager::queue_user_sync_for_user((int)$target_user_id);
+      }
+    }
+
+    wp_safe_redirect(add_query_arg([
+      'eum_team_msg' => sprintf('Applied %d metadata field(s) to %d employee(s).', count($prepared), count($selected_ids)),
+      'eum_team_type' => 'success',
+      'eum_meta_restore' => false,
+    ], $return_url));
+    exit;
+  }
+
+  private function prepare_employee_meta_value(string $key, string $raw_value, string $kind) {
+    $is_custom = str_starts_with($key, 'custom:');
+    $normalized_key = strtolower($key);
+    global $wpdb;
+    $blocked = in_array($normalized_key, [
+      'user_pass', 'user_activation_key', 'session_tokens', 'application_passwords', '_application_passwords',
+      'eum_it_access', 'eum_hr_access', 'eum_hr_it_access', 'eum_finance_access', 'eum_artist_creator_access',
+      'eum_terminated', 'eum_rehirable', 'eum_terminated_at', 'eum_terminated_by_user_id', 'eum_manager_user_id',
+    ], true);
+    if ($blocked || preg_match('/(?:^|_)capabilities$/', $normalized_key) || preg_match('/(?:^|_)user_level$/', $normalized_key)) {
+      return new WP_Error('protected_meta_key', 'This field is managed by a protected login, permission, termination, or manager workflow. Use its dedicated bulk editor.');
+    }
+    if (isset($wpdb->prefix) && in_array($normalized_key, [strtolower($wpdb->prefix . 'capabilities'), strtolower($wpdb->prefix . 'user_level')], true)) {
+      return new WP_Error('protected_meta_key', 'This is a protected login or permission field and cannot be bulk edited here.');
+    }
+
+    if ($raw_value === '') return '';
+    if ($is_custom) {
+      if (!class_exists('EUM_Fields')) return new WP_Error('unknown_meta_field', 'EUM custom fields are unavailable.');
+      $custom_key = substr($key, 7);
+      foreach (EUM_Fields::get_definitions() as $definition) {
+        if (sanitize_key((string)($definition['key'] ?? '')) !== $custom_key) continue;
+        $type = sanitize_key((string)($definition['type'] ?? 'text'));
+        if ($type === 'number' && !is_numeric($raw_value)) return new WP_Error('invalid_meta_value', 'This field requires a number.');
+        if ($type === 'email' && !is_email($raw_value)) return new WP_Error('invalid_meta_value', 'This field requires a valid email address.');
+        if ($type === 'url' && esc_url_raw($raw_value) === '') return new WP_Error('invalid_meta_value', 'This field requires a valid URL.');
+        if ($type === 'date' && !$this->is_valid_meta_date($raw_value)) return new WP_Error('invalid_meta_value', 'This field requires a date in YYYY-MM-DD format.');
+        $value = EUM_Fields::sanitize_field_value($custom_key, $type, $raw_value);
+        if ($value === '' && trim($raw_value) !== '') return new WP_Error('invalid_meta_value', 'The value is not valid for this field.');
+        return $value;
+      }
+      return new WP_Error('unknown_meta_field', 'This EUM custom field no longer exists.');
+    }
+
+    if (in_array($kind, ['json', 'json_array', 'json_object'], true)) {
+      $decoded = json_decode($raw_value);
+      if (json_last_error() !== JSON_ERROR_NONE) return new WP_Error('invalid_meta_json', 'Enter valid JSON for this registered field.');
+      if ($kind === 'json_array' && !is_array($decoded)) return new WP_Error('invalid_meta_json', 'This field requires a JSON array.');
+      if ($kind === 'json_object' && !is_object($decoded)) return new WP_Error('invalid_meta_json', 'This field requires a JSON object.');
+      if ($key !== EUM_Fields::USER_META_KEY) return $decoded;
+      return json_decode($raw_value, true);
+    }
+    if ($kind === 'boolean') {
+      $value = strtolower(trim($raw_value));
+      if (in_array($value, ['1', 'true', 'yes', 'on'], true)) return '1';
+      if (in_array($value, ['0', 'false', 'no', 'off'], true)) return '0';
+      return new WP_Error('invalid_meta_value', 'Enter true/false or 1/0 for this field.');
+    }
+    if ($kind === 'id') {
+      if (!preg_match('/^\d+$/', $raw_value)) return new WP_Error('invalid_meta_id', 'This field uses a numeric ID. Enter an ID rather than a name or label.');
+      $id = (int)$raw_value;
+      if ($id > 0 && preg_match('/(?:^|_)user_id$/i', $key) && !get_userdata($id)) return new WP_Error('invalid_meta_id', 'No user exists with that ID.');
+      if ($id > 0 && preg_match('/(?:^|_)term_id$/i', $key) && !get_term($id)) return new WP_Error('invalid_meta_id', 'No taxonomy term exists with that ID.');
+      if ($id > 0 && preg_match('/(?:^|_)attachment_id$/i', $key) && get_post_type($id) !== 'attachment') return new WP_Error('invalid_meta_id', 'No attachment exists with that ID.');
+      return $id;
+    }
+    if ($kind === 'integer') {
+      if (filter_var($raw_value, FILTER_VALIDATE_INT) === false) return new WP_Error('invalid_meta_value', 'This field requires a whole number.');
+      return (int)$raw_value;
+    }
+    if ($kind === 'number') {
+      if (!is_numeric($raw_value)) return new WP_Error('invalid_meta_value', 'This field requires a number.');
+      return (float)$raw_value;
+    }
+    if ($kind === 'email') {
+      $email = sanitize_email($raw_value);
+      if (!is_email($email)) return new WP_Error('invalid_meta_value', 'Enter a valid email address.');
+      return $email;
+    }
+    if ($kind === 'url') {
+      $url = esc_url_raw($raw_value);
+      if ($url === '') return new WP_Error('invalid_meta_value', 'Enter a valid URL.');
+      return $url;
+    }
+    if ($kind === 'date') {
+      if (!$this->is_valid_meta_date($raw_value)) return new WP_Error('invalid_meta_value', 'Enter a date in YYYY-MM-DD format.');
+      return $raw_value;
+    }
+    $value = sanitize_meta($key, sanitize_textarea_field($raw_value), 'user');
+    return is_scalar($value) ? (string)$value : new WP_Error('invalid_meta_value', 'This metadata type needs a registered format that this editor can validate.');
+  }
+
+  private function is_valid_meta_date(string $value): bool {
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+    return $date instanceof DateTimeImmutable && $date->format('Y-m-d') === $value;
   }
 
   private function sort_directory_rows(array $rows, string $sort, string $order): array {

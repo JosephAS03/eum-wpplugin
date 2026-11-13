@@ -172,6 +172,124 @@
     });
   });
 })();
+
+
+(function () {
+  function metaRows(scope) {
+    return scope ? scope.querySelector('[data-eum-meta-pairs="1"]') : null;
+  }
+
+  function metaKind(container, key) {
+    var kinds = {};
+    try { kinds = JSON.parse(container.getAttribute('data-eum-meta-types') || '{}') || {}; } catch (error) {}
+    if (Object.prototype.hasOwnProperty.call(kinds, key)) return kinds[key];
+    if (key !== 'employee_id' && /(?:^|_)(?:id|ids|user_id|term_id|post_id|attachment_id)$/i.test(key)) return 'id';
+    return 'text';
+  }
+
+  function updateMetaHint(row) {
+    var container = row && row.closest('[data-eum-meta-pairs="1"]');
+    if (!container) return;
+    var keyField = row.querySelector('[data-eum-meta-key="1"]');
+    var valueField = row.querySelector('[data-eum-meta-value="1"]');
+    var editor = row.closest('[data-eum-meta-editor="1"]');
+    var help = editor ? editor.querySelector('[data-eum-meta-kind-help="1"]') : null;
+    if (!keyField || !valueField) return;
+    var kind = metaKind(container, keyField.value.trim());
+    var messages = {
+      id: ['Numeric ID', 'Enter the numeric ID for this field. User, term, and attachment IDs are checked when applicable.'],
+      integer: ['Whole number', 'This registered field accepts a whole number.'],
+      number: ['Number', 'This field accepts a number.'],
+      boolean: ['true/false or 1/0', 'This field accepts true, false, 1, or 0.'],
+      email: ['Email address', 'Enter a valid email address.'],
+      url: ['URL', 'Enter a valid URL.'],
+      date: ['YYYY-MM-DD', 'Enter a date in YYYY-MM-DD format.'],
+      json: ['JSON array or object', 'Enter valid JSON for this metadata field.'],
+      json_array: ['JSON array', 'Enter a valid JSON array, such as [1,2].'],
+      json_object: ['JSON object', 'Enter a valid JSON object, such as {"key":"value"}.']
+    };
+    var item = messages[kind];
+    valueField.placeholder = item ? item[0] : 'Value';
+    if (help) help.textContent = item ? item[1] : 'Field suggestions appear as you type. Registered types are validated before any updates are saved.';
+  }
+
+  function syncMetaSelection(form) {
+    if (!form) return;
+    var selected = form.querySelectorAll('[data-eum-row-select="1"]:checked').length;
+    form.querySelectorAll('[data-eum-meta-selected-count="1"]').forEach(function (node) {
+      node.textContent = selected + ' selected';
+    });
+    var reason = form.querySelector('[name="employee_meta_reason"]');
+    form.querySelectorAll('[data-eum-meta-submit="1"]').forEach(function (button) {
+      button.disabled = selected < 1 || !reason || !reason.value;
+    });
+  }
+
+  function initializeMetaEditor(scope) {
+    if (!scope) return;
+    scope.querySelectorAll('[data-eum-meta-row="1"]').forEach(updateMetaHint);
+    syncMetaSelection(scope.closest('form'));
+  }
+
+  document.addEventListener('click', function (event) {
+    var add = event.target.closest('[data-eum-meta-add="1"]');
+    if (add) {
+      var editor = add.closest('[data-eum-meta-editor="1"]');
+      var container = metaRows(editor);
+      var template = editor && editor.querySelector('[data-eum-meta-row-template="1"]');
+      if (!container || !template || container.querySelectorAll('[data-eum-meta-row="1"]').length >= 25) return;
+      var index = parseInt(container.getAttribute('data-eum-meta-next-index') || '0', 10) || 0;
+      container.setAttribute('data-eum-meta-next-index', String(index + 1));
+      var html = template.innerHTML.replace(/__INDEX__/g, String(index));
+      var holder = document.createElement('div');
+      holder.innerHTML = html;
+      var row = holder.firstElementChild;
+      if (!row) return;
+      row.querySelectorAll('[data-eum-meta-remove="1"]').forEach(function (button) { button.hidden = false; });
+      container.appendChild(row);
+      container.querySelectorAll('[data-eum-meta-remove="1"]').forEach(function (button) { button.hidden = false; });
+      updateMetaHint(row);
+      var firstKey = row.querySelector('[data-eum-meta-key="1"]');
+      if (firstKey) firstKey.focus();
+      return;
+    }
+
+    var remove = event.target.closest('[data-eum-meta-remove="1"]');
+    if (remove) {
+      var rows = metaRows(remove.closest('[data-eum-meta-editor="1"]'));
+      var row = remove.closest('[data-eum-meta-row="1"]');
+      if (!rows || !row) return;
+      if (rows.querySelectorAll('[data-eum-meta-row="1"]').length > 1) {
+        row.remove();
+        if (rows.querySelectorAll('[data-eum-meta-row="1"]').length === 1) {
+          rows.querySelectorAll('[data-eum-meta-remove="1"]').forEach(function (button) { button.hidden = true; });
+        }
+      } else {
+        row.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+        updateMetaHint(row);
+      }
+    }
+  });
+
+  document.addEventListener('input', function (event) {
+    var keyField = event.target.closest('[data-eum-meta-key="1"]');
+    if (keyField) updateMetaHint(keyField.closest('[data-eum-meta-row="1"]'));
+  });
+
+  document.addEventListener('change', function (event) {
+    var form = event.target.closest('form');
+    if (event.target.matches('[data-eum-row-select="1"], [data-eum-select-all="1"], [name="employee_meta_reason"]')) {
+      syncMetaSelection(form);
+    }
+  });
+
+  function initAll() {
+    document.querySelectorAll('[data-eum-meta-editor="1"]').forEach(initializeMetaEditor);
+    document.querySelectorAll('.eum-directory__bulk-form').forEach(syncMetaSelection);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAll);
+  else initAll();
+})();
 (function () {
   function syncAvailabilityScope(form) {
     if (!form) return;
@@ -634,6 +752,13 @@
     form.querySelectorAll('[data-eum-team-bulk-open="1"]').forEach(function (button) {
       button.hidden = false;
       button.disabled = selected < 1;
+    });
+    form.querySelectorAll('[data-eum-meta-selected-count="1"]').forEach(function (node) {
+      node.textContent = selected + ' selected';
+    });
+    var metaReason = form.querySelector('[name="employee_meta_reason"]');
+    form.querySelectorAll('[data-eum-meta-submit="1"]').forEach(function (button) {
+      button.disabled = selected < 1 || !metaReason || !metaReason.value;
     });
   }
 
