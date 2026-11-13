@@ -1256,6 +1256,10 @@
     });
     activeAjaxRegionKeys = keys.slice();
     updatedRegions.forEach(reinitializeAjaxRegion);
+    var openTeamBulkModal = document.querySelector('[data-eum-team-bulk-modal="1"].is-open');
+    var popupRoot = document.getElementById('eum-popup-root');
+    var openPopupRoot = popupRoot && popupRoot.classList.contains('is-open');
+    if (!openTeamBulkModal && !openPopupRoot) document.body.classList.remove('eum-popup-open');
     if (options && options.pushState) {
       window.history.pushState({ eumAjaxRegions: keys.slice() }, '', responseUrl || window.location.href);
     }
