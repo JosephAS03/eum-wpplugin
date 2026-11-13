@@ -19,6 +19,8 @@ class EUM_Podcasts {
   const META_FINANCE_PATH_TERM_ID = '_eum_podcast_finance_path_term_id';
   const META_MANAGER_USER_IDS = '_eum_podcast_manager_user_ids';
   const META_MEMBER_USER_IDS = '_eum_podcast_member_user_ids';
+  const META_USER_GROUP_ID = '_eum_podcast_user_group_id';
+  const META_GROUP_PODCAST_ID = '_eum_podcast_group_podcast_id';
   const META_COVER_ATTACHMENT_ID = '_eum_podcast_cover_attachment_id';
   const META_ACTIVITY = '_eum_podcast_activity';
   const META_EXPENSE_LINES = '_eum_podcast_expense_lines';
@@ -42,13 +44,22 @@ class EUM_Podcasts {
   const META_EP_SOURCE_LINKS = '_eum_podcast_episode_source_links';
 
   const NONCE = 'eum_podcast_action';
+  const PODCAST_MEMBER_GROUP_NAME = 'Podcast Members';
+  const PODCAST_MEMBER_GROUP_SLUG = 'podcast-members';
+  const PODCAST_GROUPS_MIGRATED_OPTION = 'eum_podcast_user_groups_migrated';
+  const PODCAST_MEMBER_GROUP_OPTION = 'eum_podcast_member_group_term_id';
 
   private static $manager_anywhere_cache = [];
   private static $member_anywhere_cache = [];
 
   public function init(): void {
     add_action('init', [$this, 'register_post_types']);
+    add_action('init', [$this, 'maybe_sync_existing_user_groups'], 30);
     add_action('admin_menu', [$this, 'admin_menu'], 36);
+    add_action('before_delete_post', [$this, 'before_delete_podcast'], 10, 2);
+    add_action('deleted_post', [$this, 'after_delete_podcast'], 10, 2);
+    add_action('trashed_post', [$this, 'on_trashed_podcast'], 10, 2);
+    add_action('untrashed_post', [$this, 'on_untrashed_podcast'], 10, 2);
 
     add_shortcode('eum_podcasts_portal', [$this, 'shortcode_portal']);
     add_shortcode('eum_podcast_workspace', [$this, 'shortcode_workspace']);
@@ -477,7 +488,7 @@ class EUM_Podcasts {
 
     if ($can_create) {
       echo '<section class="eum-pod__panel">';
-      echo '<div class="eum-pod__panel-head"><h3>Create Podcast</h3><span>Every show must have at least one Podcast Manager. Members automatically receive Podcast Member status from the assignment.</span></div>';
+      echo '<div class="eum-pod__panel-head"><h3>Create Podcast</h3><span>Every show must have at least one Podcast Manager. Team assignments sync to the shared Podcast Members group and a group for this show.</span></div>';
       echo '<form method="post" enctype="multipart/form-data" action="' . esc_url(admin_url('admin-post.php')) . '" class="eum-pod__form">';
       wp_nonce_field(self::NONCE, '_wpnonce');
       echo '<input type="hidden" name="action" value="eum_podcast_create">';
@@ -1381,6 +1392,176 @@ class EUM_Podcasts {
     update_post_meta($podcast_id, self::META_MEMBER_USER_IDS, $member_ids);
     self::$manager_anywhere_cache = [];
     self::$member_anywhere_cache = [];
+    $this->sync_podcast_user_group($podcast_id);
+    $this->sync_shared_podcast_member_group();
+  }
+
+  public function maybe_sync_existing_user_groups(): void {
+    if (get_option(self::PODCAST_GROUPS_MIGRATED_OPTION) || !taxonomy_exists('eum_user_group')) return;
+    if ($this->sync_all_podcast_user_groups()) update_option(self::PODCAST_GROUPS_MIGRATED_OPTION, 1, false);
+  }
+
+  private function published_podcast_ids(): array {
+    return array_values(array_unique(array_map('intval', (array)get_posts([
+      'post_type' => self::CPT_PODCAST,
+      'post_status' => 'publish',
+      'numberposts' => -1,
+      'fields' => 'ids',
+      'orderby' => 'ID',
+      'order' => 'ASC',
+    ]))));
+  }
+
+  private function sync_all_podcast_user_groups(): bool {
+    if (!taxonomy_exists('eum_user_group')) return false;
+    $ok = true;
+    foreach ($this->published_podcast_ids() as $podcast_id) {
+      if (!$this->sync_podcast_user_group((int)$podcast_id)) $ok = false;
+    }
+    if (!$this->sync_shared_podcast_member_group()) $ok = false;
+    return $ok;
+  }
+
+  private function ensure_shared_podcast_member_group(): int {
+    if (!taxonomy_exists('eum_user_group')) return 0;
+    $group_id = (int)get_option(self::PODCAST_MEMBER_GROUP_OPTION, 0);
+    $term = $group_id > 0 ? get_term($group_id, 'eum_user_group') : null;
+    if (!$term || is_wp_error($term)) {
+      $existing = get_term_by('slug', self::PODCAST_MEMBER_GROUP_SLUG, 'eum_user_group');
+      if ($existing && !is_wp_error($existing)) {
+        $group_id = (int)$existing->term_id;
+      } else {
+        $created = wp_insert_term(self::PODCAST_MEMBER_GROUP_NAME, 'eum_user_group', ['slug' => self::PODCAST_MEMBER_GROUP_SLUG]);
+        if (is_wp_error($created)) {
+          if (function_exists('eum_log_message')) eum_log_message('[EUM Podcasts] Could not create the shared Podcast Members group: ' . $created->get_error_message());
+          return 0;
+        }
+        $group_id = (int)($created['term_id'] ?? 0);
+      }
+    }
+    if ($group_id <= 0) return 0;
+    update_option(self::PODCAST_MEMBER_GROUP_OPTION, $group_id, false);
+    update_term_meta($group_id, '_eum_podcast_managed_group', 'members');
+    return $group_id;
+  }
+
+  private function ensure_podcast_user_group(int $podcast_id): int {
+    if ($podcast_id <= 0 || !taxonomy_exists('eum_user_group')) return 0;
+    $podcast = get_post($podcast_id);
+    if (!$podcast || $podcast->post_type !== self::CPT_PODCAST) return 0;
+    $group_name = 'Podcast: ' . sanitize_text_field((string)$podcast->post_title);
+    if ($group_name === 'Podcast: ') $group_name .= 'Show ' . $podcast_id;
+    $group_slug = 'eum-podcast-' . $podcast_id;
+    $group_id = (int)get_post_meta($podcast_id, self::META_USER_GROUP_ID, true);
+    $term = $group_id > 0 ? get_term($group_id, 'eum_user_group') : null;
+    if (!$term || is_wp_error($term)) {
+      $existing = get_term_by('slug', $group_slug, 'eum_user_group');
+      if ($existing && !is_wp_error($existing)) {
+        $group_id = (int)$existing->term_id;
+      } else {
+        $created = wp_insert_term($group_name, 'eum_user_group', ['slug' => $group_slug]);
+        if (is_wp_error($created)) {
+          if (function_exists('eum_log_message')) eum_log_message('[EUM Podcasts] Could not create a user group for podcast #' . $podcast_id . ': ' . $created->get_error_message());
+          return 0;
+        }
+        $group_id = (int)($created['term_id'] ?? 0);
+      }
+    }
+    if ($group_id <= 0) return 0;
+    $current_term = get_term($group_id, 'eum_user_group');
+    if ($current_term && !is_wp_error($current_term) && ((string)$current_term->name !== $group_name || (string)$current_term->slug !== $group_slug)) {
+      $updated = wp_update_term($group_id, 'eum_user_group', ['name' => $group_name, 'slug' => $group_slug]);
+      if (is_wp_error($updated)) {
+        if (function_exists('eum_log_message')) eum_log_message('[EUM Podcasts] Could not update the user group for podcast #' . $podcast_id . ': ' . $updated->get_error_message());
+        return 0;
+      }
+    }
+    update_post_meta($podcast_id, self::META_USER_GROUP_ID, $group_id);
+    update_term_meta($group_id, self::META_GROUP_PODCAST_ID, $podcast_id);
+    update_term_meta($group_id, '_eum_podcast_managed_group', 'podcast');
+    return $group_id;
+  }
+
+  private function podcast_team_user_ids(int $podcast_id): array {
+    $manager_ids = array_map('intval', (array)get_post_meta($podcast_id, self::META_MANAGER_USER_IDS, true));
+    $member_ids = array_map('intval', (array)get_post_meta($podcast_id, self::META_MEMBER_USER_IDS, true));
+    $user_ids = array_values(array_unique(array_filter(array_merge($manager_ids, $member_ids), static fn($user_id) => $user_id > 0)));
+    return array_values(array_filter($user_ids, static fn($user_id) => (bool)get_userdata((int)$user_id)));
+  }
+
+  private function sync_group_members(int $group_id, array $desired_user_ids): bool {
+    if ($group_id <= 0 || !taxonomy_exists('eum_user_group')) return false;
+    $current_ids = get_objects_in_term($group_id, 'eum_user_group');
+    if (is_wp_error($current_ids)) return false;
+    $current_ids = array_values(array_unique(array_map('intval', (array)$current_ids)));
+    $desired_user_ids = array_values(array_unique(array_filter(array_map('intval', $desired_user_ids), static fn($user_id) => $user_id > 0 && (bool)get_userdata($user_id))));
+    $ok = true;
+    foreach (array_diff($current_ids, $desired_user_ids) as $user_id) {
+      $removed = wp_remove_object_terms((int)$user_id, $group_id, 'eum_user_group');
+      if (is_wp_error($removed)) $ok = false;
+    }
+    foreach (array_diff($desired_user_ids, $current_ids) as $user_id) {
+      $assigned = wp_set_object_terms((int)$user_id, [$group_id], 'eum_user_group', true);
+      if (is_wp_error($assigned)) $ok = false;
+    }
+    return $ok;
+  }
+
+  private function sync_podcast_user_group(int $podcast_id): bool {
+    $group_id = $this->ensure_podcast_user_group($podcast_id);
+    return $group_id > 0 && $this->sync_group_members($group_id, $this->podcast_team_user_ids($podcast_id));
+  }
+
+  private function sync_shared_podcast_member_group(): bool {
+    $group_id = $this->ensure_shared_podcast_member_group();
+    if ($group_id <= 0) return false;
+    $member_ids = [];
+    foreach ($this->published_podcast_ids() as $podcast_id) {
+      $member_ids = array_merge($member_ids, $this->podcast_team_user_ids((int)$podcast_id));
+    }
+    return $this->sync_group_members($group_id, $member_ids);
+  }
+
+  public function before_delete_podcast(int $post_id, $post = null): void {
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== self::CPT_PODCAST) return;
+    $this->delete_podcast_user_group($post_id);
+  }
+
+  public function after_delete_podcast(int $post_id, $post = null): void {
+    $post_type = is_object($post) ? (string)($post->post_type ?? '') : '';
+    if ($post_type === self::CPT_PODCAST) {
+      $this->sync_shared_podcast_member_group();
+      self::$manager_anywhere_cache = [];
+      self::$member_anywhere_cache = [];
+    }
+  }
+
+  public function on_trashed_podcast(int $post_id, $post = null): void {
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== self::CPT_PODCAST) return;
+    $this->delete_podcast_user_group($post_id);
+    $this->sync_shared_podcast_member_group();
+    self::$manager_anywhere_cache = [];
+    self::$member_anywhere_cache = [];
+  }
+
+  public function on_untrashed_podcast(int $post_id, $post = null): void {
+    $post = get_post($post_id);
+    if (!$post || $post->post_type !== self::CPT_PODCAST) return;
+    $this->sync_podcast_user_group($post_id);
+    $this->sync_shared_podcast_member_group();
+    self::$manager_anywhere_cache = [];
+    self::$member_anywhere_cache = [];
+  }
+
+  private function delete_podcast_user_group(int $podcast_id): void {
+    $group_id = (int)get_post_meta($podcast_id, self::META_USER_GROUP_ID, true);
+    if ($group_id <= 0 || !taxonomy_exists('eum_user_group')) return;
+    if ((int)get_term_meta($group_id, self::META_GROUP_PODCAST_ID, true) === $podcast_id) {
+      wp_delete_term($group_id, 'eum_user_group');
+    }
+    delete_post_meta($podcast_id, self::META_USER_GROUP_ID);
   }
 
   public function handle_add_member(): void {
@@ -2648,6 +2829,7 @@ class EUM_Podcasts {
       $member_ids = array_values(array_filter(array_map('intval', (array)($payload['member_user_ids'] ?? [])), static fn($user_id) => $user_id > 0 && get_userdata($user_id)));
       if (!empty($manager_ids)) $this->save_podcast_team($podcast_id, $manager_ids, $member_ids);
     }
+    $this->sync_podcast_user_group($podcast_id);
   }
 
   private function build_episode_exchange_xml(array $episode): string {
