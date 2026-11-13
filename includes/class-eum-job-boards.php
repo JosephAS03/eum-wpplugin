@@ -89,6 +89,7 @@ class EUM_Job_Boards {
     add_action('admin_post_eum_job_board_candidate_clone_invite', [$this, 'handle_candidate_clone_invite']);
     add_action('admin_post_eum_job_board_candidate_signup', [$this, 'handle_preaccepted_candidate_signup']);
     add_action('admin_post_nopriv_eum_job_board_candidate_signup', [$this, 'handle_preaccepted_candidate_signup']);
+    add_action('login_init', [$this, 'handle_candidate_auto_login_ticket'], 1);
     add_action('admin_post_eum_job_board_candidate_review', [$this, 'handle_candidate_review']);
     add_action('admin_post_nopriv_eum_job_board_candidate_review', [$this, 'handle_candidate_review']);
     add_action('admin_post_eum_job_board_candidate_pending_hire_update', [$this, 'handle_candidate_pending_hire_update']);
@@ -2006,12 +2007,7 @@ class EUM_Job_Boards {
       delete_user_meta((int)$user_id, EUM_Access::META_PASSWORD_SETUP_REQUIRED_AT);
     }
     $this->release_candidate_account_lock($candidate_id, $lock_token);
-    $user = get_user_by('id', (int)$user_id);
-    wp_set_current_user((int)$user_id);
-    nocache_headers();
-    wp_set_auth_cookie((int)$user_id, true);
-    if ($user) do_action('wp_login', $user->user_login, $user);
-    $this->finish_preaccepted_candidate_signup((int)$user_id, $candidate_id, $password);
+    $this->finish_preaccepted_candidate_signup((int)$user_id, $candidate_id, $password, false, true);
   }
 
   private function accept_preaccepted_invite_for_hire_user(int $candidate_id, int $user_id, array $profile, string $full_name, string $email, string $phone, string $password, string $lock_token): void {
@@ -2059,12 +2055,7 @@ class EUM_Job_Boards {
       delete_user_meta($user_id, EUM_Access::META_PASSWORD_SETUP_REQUIRED_AT);
     }
     $this->release_candidate_account_lock($candidate_id, $lock_token);
-    $user = get_user_by('id', $user_id);
-    wp_set_current_user($user_id);
-    nocache_headers();
-    wp_set_auth_cookie($user_id, true);
-    if ($user) do_action('wp_login', $user->user_login, $user);
-    $this->finish_preaccepted_candidate_signup($user_id, $candidate_id, $password, true);
+    $this->finish_preaccepted_candidate_signup($user_id, $candidate_id, $password, true, true);
   }
 
   private function accept_preaccepted_invite_as_internal_candidate(int $candidate_id, int $user_id, string $lock_token): void {
@@ -2098,14 +2089,30 @@ class EUM_Job_Boards {
     self::apply_candidate_preset_user_meta($user_id, $candidate_id);
     self::ensure_candidate_application_log($candidate_id, $user_id, $user_id, 'Pre-Accepted Internal Candidate Signup');
     $this->release_candidate_account_lock($candidate_id, $lock_token);
-    $this->finish_preaccepted_candidate_signup($user_id, $candidate_id, '');
+    $this->finish_preaccepted_candidate_signup($user_id, $candidate_id, '', false, false);
   }
 
-  private function finish_preaccepted_candidate_signup(int $user_id, int $candidate_id, string $password, bool $existing_user = false): void {
+  private function finish_preaccepted_candidate_signup(int $user_id, int $candidate_id, string $password, bool $existing_user = false, bool $auto_login = false): void {
     $redirect = $this->sanitize_signup_redirect_url((string)get_post_meta($candidate_id, self::CAND_META_SIGNUP_REDIRECT_URL, true));
     if ($redirect === '') $redirect = home_url('/');
 
-    wp_redirect($redirect);
+    $destination = $redirect;
+    if ($auto_login) {
+      $ticket = $this->create_candidate_auto_login_ticket($user_id, $candidate_id, $redirect);
+      if ($ticket !== '') {
+        $login_url = add_query_arg('eum_candidate_autologin_ticket', $ticket, site_url('wp-login.php', 'login'));
+        nocache_headers();
+        wp_safe_redirect($login_url);
+      } else {
+        $destination = $this->complete_candidate_auto_login($user_id, $redirect);
+        nocache_headers();
+        wp_redirect($destination);
+      }
+    } else {
+      nocache_headers();
+      wp_redirect($destination);
+    }
+
     if (function_exists('fastcgi_finish_request')) {
       // Let PHP-FPM return the login cookie and redirect before external provisioning can block.
       fastcgi_finish_request();
@@ -2115,6 +2122,69 @@ class EUM_Job_Boards {
 
     do_action($existing_user ? 'eum_preaccepted_candidate_existing_user_ready' : 'eum_preaccepted_candidate_user_ready', $user_id, $candidate_id, $password);
     exit;
+  }
+
+  private function create_candidate_auto_login_ticket(int $user_id, int $candidate_id, string $redirect): string {
+    if ($user_id <= 0 || $candidate_id <= 0) return '';
+    try {
+      $ticket = bin2hex(random_bytes(32));
+    } catch (Throwable $error) {
+      return '';
+    }
+
+    $payload = [
+      'user_id' => $user_id,
+      'candidate_id' => $candidate_id,
+      'redirect' => $redirect,
+      'created_at' => time(),
+    ];
+    $key = 'eum_candidate_autologin_' . hash('sha256', $ticket);
+    return set_transient($key, $payload, 10 * MINUTE_IN_SECONDS) ? $ticket : '';
+  }
+
+  public function handle_candidate_auto_login_ticket(): void {
+    $raw_ticket = $_GET['eum_candidate_autologin_ticket'] ?? '';
+    if (!is_scalar($raw_ticket)) return;
+    $ticket = strtolower(sanitize_text_field(wp_unslash((string)$raw_ticket)));
+    if (!preg_match('/^[a-f0-9]{64}$/', $ticket)) return;
+
+    $key = 'eum_candidate_autologin_' . hash('sha256', $ticket);
+    $payload = get_transient($key);
+    delete_transient($key);
+    if (!is_array($payload)) wp_die('This automatic sign-in link has expired or has already been used.', 'Sign-in link unavailable', ['response' => 403]);
+
+    $user_id = absint($payload['user_id'] ?? 0);
+    $candidate_id = absint($payload['candidate_id'] ?? 0);
+    $linked_user_id = (int)get_post_meta($candidate_id, self::CAND_META_USER_ID, true);
+    $invite_completed = (string)get_post_meta($candidate_id, self::CAND_META_INVITE_COMPLETED_AT, true);
+    $user = $user_id > 0 ? get_user_by('id', $user_id) : false;
+    if (!$user instanceof WP_User || $candidate_id <= 0 || $linked_user_id !== $user_id || $invite_completed === '') {
+      wp_die('This automatic sign-in link is no longer valid.', 'Sign-in link unavailable', ['response' => 403]);
+    }
+    if (is_user_logged_in() && get_current_user_id() !== $user_id) {
+      wp_die('Sign out of the current account before using this sign-in link.', 'Sign-in link unavailable', ['response' => 403]);
+    }
+
+    $redirect = $this->sanitize_signup_redirect_url((string)($payload['redirect'] ?? ''));
+    if ($redirect === '') $redirect = home_url('/');
+    $redirect = $this->complete_candidate_auto_login($user_id, $redirect);
+    nocache_headers();
+    wp_redirect($redirect, 302, 'EUM Candidate First Sign-in');
+    exit;
+  }
+
+  private function complete_candidate_auto_login(int $user_id, string $redirect): string {
+    $user = get_user_by('id', $user_id);
+    if (!$user instanceof WP_User || $user_id <= 0) return home_url('/');
+
+    wp_set_current_user($user_id);
+    wp_set_auth_cookie($user_id, true, is_ssl());
+    do_action('wp_login', $user->user_login, $user);
+
+    $redirect = $this->sanitize_signup_redirect_url($redirect);
+    if ($redirect === '') $redirect = home_url('/');
+    $filtered_redirect = apply_filters('login_redirect', $redirect, $redirect, $user);
+    return $this->sanitize_signup_redirect_url((string)$filtered_redirect) ?: $redirect;
   }
 
   public function handle_candidate_update(): void {
