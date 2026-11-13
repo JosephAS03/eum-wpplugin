@@ -1293,6 +1293,57 @@
     if (fetchOptions.method === 'POST') fetchOptions.body = options.body;
     return window.fetch(url, fetchOptions).then(function (response) {
       return response.text().then(function (html) {
+        var contentType = response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '';
+        if (isPost && contentType.toLowerCase().indexOf('application/json') !== -1) {
+          var payload;
+          try { payload = JSON.parse(html); } catch (error) { payload = null; }
+          var result = payload && payload.data ? payload.data : null;
+          if (!response.ok || !payload || !payload.success || !result) {
+            var serverMessage = result && result.message ? String(result.message) : 'The server could not confirm the bulk update.';
+            showAjaxStatus(serverMessage, true, 12000);
+            return false;
+          }
+
+          var refreshUrl;
+          try {
+            refreshUrl = new URL(result.return_url || window.location.href, window.location.href);
+            if (refreshUrl.origin !== window.location.origin) throw new Error('Cross-origin refresh URL');
+          } catch (error) {
+            showAjaxStatus(String(result.message || 'Bulk update processed.') + ' The Employee List could not be refreshed; reload it before continuing.', true, 12000);
+            return false;
+          }
+
+          return window.fetch(refreshUrl.toString(), {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            cache: 'no-store'
+          }).then(function (refreshResponse) {
+            return refreshResponse.text().then(function (refreshHtml) {
+              if (!refreshResponse.ok) {
+                showAjaxStatus(String(result.message || 'Bulk update processed.') + ' The Employee List could not be refreshed; reload it before continuing.', true, 12000);
+                return false;
+              }
+              var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });
+              var replaced = currentRegions.every(function (region) { return !!region; }) && replaceAjaxRegions(currentRegions, keys, refreshHtml, refreshResponse.url || refreshUrl.toString(), {
+                pushState: !(options && options.popstate),
+                strictTargets: !!(options && options.strictTargets),
+                preventFallback: true
+              });
+              if (replaced) {
+                var isWarning = result.type === 'warning' || result.type === 'error';
+                showAjaxStatus(String(result.message || 'Bulk update processed.'), isWarning, 12000);
+              } else {
+                showAjaxStatus(String(result.message || 'Bulk update processed.') + ' The Employee List could not be refreshed; reload it before continuing.', true, 12000);
+              }
+              return replaced;
+            });
+          }).catch(function () {
+            showAjaxStatus(String(result.message || 'Bulk update processed.') + ' The Employee List could not be refreshed; reload it before continuing.', true, 12000);
+            return false;
+          });
+        }
+
         var responseDocument = new DOMParser().parseFromString(html, 'text/html');
         var notice = responseDocument.querySelector('[data-eum-job-notice="1"], [data-eum-team-bulk-notice="1"]');
         var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });

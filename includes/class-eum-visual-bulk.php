@@ -1108,6 +1108,7 @@ class EUM_Visual_Bulk {
       'job_company_override' => 'core:job_company',
       'manager_user_id' => 'core:eum_manager_user_id',
       'job_path' => 'tax:eum_job_path',
+      'job_path_term_id' => 'tax:eum_job_path',
       'location_path' => 'tax:eum_location',
       'user_groups' => 'tax:eum_user_group',
       'projects' => 'tax:eum_project',
@@ -1191,7 +1192,18 @@ class EUM_Visual_Bulk {
     }
 
     $job_term_id = $this->current_leaf_term_id($user_id, 'eum_job_path');
-    if (array_key_exists('job_path', $row)) {
+    if (array_key_exists('job_path_term_id', $row)) {
+      $selected_term_id = max(0, (int)$row['job_path_term_id']);
+      $selected_term = $selected_term_id > 0 && taxonomy_exists('eum_job_path')
+        ? get_term($selected_term_id, 'eum_job_path')
+        : null;
+      if (!$selected_term || is_wp_error($selected_term)) {
+        return new WP_Error('invalid_job_path', 'The selected Job Path is no longer available. Refresh the list and choose it again.');
+      }
+      $assigned = wp_set_object_terms($user_id, [$selected_term_id], 'eum_job_path', false);
+      if (is_wp_error($assigned)) return $assigned;
+      $job_term_id = $selected_term_id;
+    } elseif (array_key_exists('job_path', $row)) {
       $job_path = trim((string)$row['job_path']);
       if ($job_path === '' && $clear_mode) {
         wp_set_object_terms($user_id, [], 'eum_job_path', false);
@@ -1249,7 +1261,7 @@ class EUM_Visual_Bulk {
       }
     }
 
-    if (class_exists('EUM_Company_Divisions') && ($job_term_id > 0 || $job_division_touched || array_key_exists('job_path', $row))) {
+    if (class_exists('EUM_Company_Divisions') && ($job_term_id > 0 || $job_division_touched || array_key_exists('job_path', $row) || array_key_exists('job_path_term_id', $row))) {
       $override_division = $job_division_touched
         ? sanitize_text_field((string)$row['job_company_override'])
         : EUM_Company_Divisions::user_division_override($user_id);

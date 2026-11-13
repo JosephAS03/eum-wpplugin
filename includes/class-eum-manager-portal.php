@@ -1287,7 +1287,9 @@ class EUM_Manager_Portal {
           $row['manager_user_id'] = $value;
           break;
         case 'tax:eum_job_path':
-          $row['job_path'] = $this->user_tax_path_from_term_id('eum_job_path', (int)$value, ' > ');
+          // Keep the selected term ID intact instead of converting it to a path
+          // string and looking it up again during the save.
+          $row['job_path_term_id'] = (int)$value;
           break;
         case 'tax:eum_location':
           $row['location_path'] = $this->user_tax_path_from_term_id('eum_location', (int)$value, ' > ');
@@ -1374,8 +1376,7 @@ class EUM_Manager_Portal {
       $this->handle_employee_meta_bulk_update($actor_user_id, $selected_ids, $return_url);
     }
     if (count($selected_ids) < 1) {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Select at least one visible user first.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Select at least one visible user first.', 'error', $return_url);
     }
 
     if (sanitize_key((string)wp_unslash($_POST['team_bulk_action'] ?? '')) === 'email_list') {
@@ -1389,20 +1390,16 @@ class EUM_Manager_Portal {
     $has_redirect_change = in_array($redirect_action, ['set', 'clear'], true);
     $redirect_destination = trim((string)wp_unslash($_POST['bulk_login_redirect_url'] ?? ''));
     if (!in_array($redirect_action, ['none', 'set', 'clear'], true)) {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Choose a valid sign-in destination action.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Choose a valid sign-in destination action.', 'error', $return_url);
     }
     if ($redirect_action === 'set' && $redirect_destination === '') {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Enter a destination URL to set.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Enter a destination URL to set.', 'error', $return_url);
     }
     if (!$has_profile_changes && !$has_employment_changes && !$has_redirect_change) {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Choose a profile field or sign-in destination change to apply.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Choose a profile field or sign-in destination change to apply.', 'error', $return_url);
     }
     if (($has_profile_changes || $has_employment_changes || $has_redirect_change) && $reason === '') {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Provide a reason for the changes being applied.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Provide a reason for the changes being applied.', 'error', $return_url);
     }
     $row = $this->visual_bulk_row_from_profile_fields($field_values);
 
@@ -1410,8 +1407,7 @@ class EUM_Manager_Portal {
     $skip_email = !empty($_POST['skip_email']);
     $helper = class_exists('EUM_Visual_Bulk') ? new EUM_Visual_Bulk() : null;
     if (!$helper && !empty($row)) {
-      wp_safe_redirect(add_query_arg(['eum_team_msg' => 'Bulk update tools are unavailable.', 'eum_team_type' => 'error'], $return_url));
-      exit;
+      $this->finish_team_bulk_response('Bulk update tools are unavailable.', 'error', $return_url);
     }
 
     $updated = 0;
@@ -1475,7 +1471,27 @@ class EUM_Manager_Portal {
     if (!empty($errors)) $parts[] = implode(' | ', array_slice($errors, 0, 3));
     if (empty($parts)) $parts[] = 'No changes were applied.';
     $type = !empty($errors) ? 'warning' : 'success';
-    wp_safe_redirect(add_query_arg(['eum_team_msg' => implode(' ', $parts), 'eum_team_type' => $type], $return_url));
+    $this->finish_team_bulk_response(implode(' ', $parts), $type, $return_url);
+  }
+
+  private function finish_team_bulk_response(string $message, string $type, string $return_url): void {
+    $target_url = add_query_arg([
+      'eum_team_msg' => $message,
+      'eum_team_type' => $type,
+    ], $return_url);
+    $target_url = wp_validate_redirect($target_url, home_url('/'));
+    $is_ajax = isset($_SERVER['HTTP_X_REQUESTED_WITH'])
+      && strtolower(sanitize_text_field(wp_unslash((string)$_SERVER['HTTP_X_REQUESTED_WITH']))) === 'xmlhttprequest';
+
+    if ($is_ajax) {
+      wp_send_json_success([
+        'message' => $message,
+        'type' => $type,
+        'return_url' => $target_url,
+      ]);
+    }
+
+    wp_safe_redirect($target_url);
     exit;
   }
 
