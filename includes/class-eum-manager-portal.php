@@ -451,11 +451,40 @@ class EUM_Manager_Portal {
     $include_indirect = !empty($args['include_indirect']);
     $global_employee_list = !empty($args['global_employee_list']);
     $report_scope = in_array((string)($args['report_scope'] ?? 'all'), ['all', 'direct', 'indirect'], true) ? (string)$args['report_scope'] : 'all';
-    $managed_levels = class_exists('EUM_Manager_IDs') ? EUM_Manager_IDs::managed_user_levels_for_manager_user($current_user_id, true, $include_indirect) : [];
+    $search_queries = [];
+    if (!empty($args['q'])) {
+      $raw_queries = preg_split('/[,;\r\n]+/', (string)$args['q']);
+      foreach (is_array($raw_queries) ? $raw_queries : [] as $query) {
+        $words = preg_split('/\s+/', strtolower(trim((string)$query)), -1, PREG_SPLIT_NO_EMPTY);
+        if (!empty($words)) $search_queries[] = $words;
+      }
+    }
+
+    $user_query = ['fields' => ['ID','user_login','user_email','display_name']];
+    if (!empty($search_queries)) {
+      $matching_user_ids = $this->directory_user_ids_matching_name_search($search_queries);
+      if (empty($matching_user_ids)) return [];
+      $user_query['include'] = $matching_user_ids;
+    }
+    $directory_users = get_users($user_query);
+
+    $managed_levels = [];
+    if (!$is_privileged && class_exists('EUM_Manager_IDs')) {
+      if (!empty($search_queries)) {
+        foreach ($directory_users as $candidate) {
+          $candidate_id = (int)$candidate->ID;
+          if ($candidate_id <= 0 || $candidate_id === $current_user_id) continue;
+          $depth = EUM_Manager_IDs::management_depth_for_manager_user_subject($current_user_id, $candidate_id);
+          if ($depth > 0 && ($include_indirect || $depth === 1)) $managed_levels[$candidate_id] = $depth;
+        }
+      } else {
+        $managed_levels = EUM_Manager_IDs::managed_user_levels_for_manager_user($current_user_id, true, $include_indirect);
+      }
+    }
     if (!$is_privileged && !$global_employee_list && empty($managed_manager_ids) && empty($managed_levels)) return [];
 
     $rows = [];
-    foreach (get_users(['fields' => ['ID','user_login','user_email','display_name']]) as $u) {
+    foreach ($directory_users as $u) {
       $uid = (int)$u->ID;
       if ($uid === $current_user_id && !$global_employee_list) continue;
 
@@ -463,7 +492,9 @@ class EUM_Manager_Portal {
       $direct_manager_id = class_exists('EUM_Personnel') ? EUM_Personnel::effective_manager_user_id($uid) : 0;
       $is_pending_manager = class_exists('EUM_Profiles') && EUM_Profiles::is_pending_manager_for_target($current_user_id, $uid);
       $report_level = isset($managed_levels[$uid]) ? (int)$managed_levels[$uid] : 0;
-      if ($report_level <= 0 && !$include_indirect && class_exists('EUM_Manager_IDs')) {
+      if ($is_privileged && $uid !== $current_user_id) {
+        $report_level = 1;
+      } elseif ($report_level <= 0 && !$include_indirect && class_exists('EUM_Manager_IDs')) {
         $report_level = EUM_Manager_IDs::user_is_direct_manager_of_user($current_user_id, $uid) ? 1 : 0;
       }
       if ($is_pending_manager && $report_level <= 0) $report_level = 1;
@@ -484,10 +515,6 @@ class EUM_Manager_Portal {
       $job_path = $this->user_tax_path($uid, 'eum_job_path', ' / ');
       $location = $this->user_tax_path($uid, 'eum_location', ' / ');
       $employee_id = class_exists('EUM_Workforce_Lifecycle') ? EUM_Workforce_Lifecycle::employee_id_for_user($uid) : '';
-      if (!empty($args['q'])) {
-        $haystack = strtolower(trim(($u->display_name ?? '') . ' ' . ($u->user_login ?? '') . ' ' . ($u->user_email ?? '') . ' ' . $employee_id . ' ' . $job_path . ' ' . $location . ' ' . $this->report_level_label($report_level)));
-        if (strpos($haystack, strtolower((string)$args['q'])) === false) continue;
-      }
       $job_filters = $this->sanitize_job_path_filter_ids($args['job_filters'] ?? []);
       if (!empty($job_filters) && !$this->user_matches_job_filters($uid, $job_filters)) continue;
       if ((int)($args['group_filter'] ?? 0) > 0 && !$this->user_matches_group_filter($uid, (int)$args['group_filter'])) continue;
@@ -529,6 +556,33 @@ class EUM_Manager_Portal {
     return $rows;
   }
 
+  private function directory_user_ids_matching_name_search(array $queries): array {
+    global $wpdb;
+    if (!is_object($wpdb) || empty($queries) || empty($wpdb->users) || empty($wpdb->usermeta)) return [];
+
+    $groups = [];
+    $parameters = [];
+    foreach ($queries as $words) {
+      if (!is_array($words) || empty($words)) continue;
+      $word_clauses = [];
+      foreach ($words as $word) {
+        $pattern = '%' . $wpdb->esc_like((string)$word) . '%';
+        $word_clauses[] = '(u.display_name LIKE %s OR u.user_login LIKE %s OR first_name_meta.meta_value LIKE %s OR last_name_meta.meta_value LIKE %s)';
+        array_push($parameters, $pattern, $pattern, $pattern, $pattern);
+      }
+      if (!empty($word_clauses)) $groups[] = '(' . implode(' AND ', $word_clauses) . ')';
+    }
+    if (empty($groups)) return [];
+
+    $sql = 'SELECT DISTINCT u.ID FROM ' . $wpdb->users . ' u'
+      . ' LEFT JOIN ' . $wpdb->usermeta . ' first_name_meta ON (first_name_meta.user_id = u.ID AND first_name_meta.meta_key = \'first_name\')'
+      . ' LEFT JOIN ' . $wpdb->usermeta . ' last_name_meta ON (last_name_meta.user_id = u.ID AND last_name_meta.meta_key = \'last_name\')'
+      . ' WHERE ' . implode(' OR ', $groups);
+    $prepared_sql = $wpdb->prepare($sql, $parameters);
+    if (!is_string($prepared_sql) || $prepared_sql === '') return [];
+    return array_values(array_unique(array_filter(array_map('intval', (array)$wpdb->get_col($prepared_sql)), static fn($user_id) => $user_id > 0)));
+  }
+
   private function render_directory_filters(string $q, array $job_filters, int $group_filter, bool $include_indirect, string $report_scope, string $sort, string $order, int $limit, string $mode, bool $include_terminated = false): string {
     $job_filters = $this->sanitize_job_path_filter_ids($job_filters);
     ob_start();
@@ -538,7 +592,7 @@ class EUM_Manager_Portal {
       $this->render_hidden_query_inputs((string)$key, $value);
     }
     echo '<div class="eum-directory__filter-grid">';
-    echo '<label><span>Search</span><input type="text" name="eum_q" value="' . esc_attr($q) . '" placeholder="Search people, email, path, or location"></label>';
+    echo '<label class="eum-directory__search-field"><span>Search names</span><input type="search" name="eum_q" value="' . esc_attr($q) . '" placeholder="Type a name; separate names with commas" data-eum-live-directory-search="1" autocomplete="off"><small>Results update as you type. Use commas for multiple names.</small></label>';
     echo '<div class="eum-directory__filter-field eum-directory__filter-field--paths"><span>Job Paths</span>' . $this->render_job_path_filter_picker_group($job_filters) . '</div>';
     echo '<label><span>User Group</span><select name="eum_user_group_filter"><option value="0">All groups</option>';
     foreach ($this->user_group_filter_options() as $term_id => $label) echo '<option value="' . (int)$term_id . '" ' . selected($group_filter, (int)$term_id, false) . '>' . esc_html($label) . '</option>';
@@ -562,7 +616,7 @@ class EUM_Manager_Portal {
     echo '<div class="eum-directory__panel-head"><h4>' . esc_html($title) . '</h4><span>' . count($rows) . ' people</span></div>';
     echo '<div class="eum-directory__table-wrap"><table class="eum-directory__table"><thead><tr>';
     if ($bulk_selectable) echo '<th class="eum-directory__select-col"><input type="checkbox" data-eum-select-all="1" aria-label="Select all visible users"></th>';
-    echo '<th>Person</th><th>Employee ID</th><th>Job Path</th><th>Location</th><th>Manager</th><th>Relationship</th>' . ($terminated ? '<th>Status</th>' : '') . '<th>Actions</th></tr></thead><tbody>';
+    echo '<th scope="col">Person</th><th scope="col">Employee ID</th><th scope="col">Job Path</th><th scope="col">Location</th><th scope="col">Manager</th><th scope="col">Relationship</th>' . ($terminated ? '<th scope="col">Status</th>' : '') . '<th scope="col">Actions</th></tr></thead><tbody>';
     foreach ($rows as $row) {
       $manager_label = $row['manager'] !== '' ? $row['manager'] . ($row['manager_id'] ? ' (#' . (int)$row['manager_id'] . ')' : '') : '—';
       $is_terminated = !empty($row['is_terminated']);
@@ -570,19 +624,19 @@ class EUM_Manager_Portal {
       if ($row['terminated_at'] !== '') $status .= ' · ' . $row['terminated_at'];
       $avatar = class_exists('EUM_Profiles') ? EUM_Profiles::profile_avatar_html((int)$row['ID'], 36, 'eum-directory__avatar') : '';
       echo '<tr data-eum-row-id="' . (int)$row['ID'] . '">';
-      if ($bulk_selectable) echo '<td class="eum-directory__select-col"><input type="checkbox" name="selected_user_ids[]" value="' . (int)$row['ID'] . '" data-eum-row-select="1"></td>';
-      echo '<td><div class="eum-directory__person">' . $avatar . '<div class="eum-directory__person-details"><strong>' . esc_html($row['name']) . '</strong><span>' . esc_html($row['email']) . '</span></div></div></td>';
-      echo '<td>' . esc_html((string)($row['employee_id'] ?? '')) . '</td>';
-      echo '<td>' . esc_html($row['job_path'] !== '' ? '/ ' . ltrim($row['job_path'], '/ ') : '—') . '</td>';
-      echo '<td>' . esc_html($row['location'] !== '' ? '/ ' . ltrim($row['location'], '/ ') : '—') . '</td>';
+      if ($bulk_selectable) echo '<td class="eum-directory__select-col" data-label="Select"><input type="checkbox" name="selected_user_ids[]" value="' . (int)$row['ID'] . '" data-eum-row-select="1"></td>';
+      echo '<td class="eum-directory__cell--person" data-label="Person"><div class="eum-directory__person">' . $avatar . '<div class="eum-directory__person-details"><strong>' . esc_html($row['name']) . '</strong><span>' . esc_html($row['email']) . '</span></div></div></td>';
+      echo '<td data-label="Employee ID">' . esc_html((string)($row['employee_id'] ?? '')) . '</td>';
+      echo '<td data-label="Job Path">' . esc_html($row['job_path'] !== '' ? '/ ' . ltrim($row['job_path'], '/ ') : '—') . '</td>';
+      echo '<td data-label="Location">' . esc_html($row['location'] !== '' ? '/ ' . ltrim($row['location'], '/ ') : '—') . '</td>';
       if ((int)$row['manager_id'] > 0 && class_exists('EUM_Profiles')) {
-        echo '<td><div class="eum-directory__manager">' . EUM_Profiles::profile_avatar_html((int)$row['manager_id'], 26, 'eum-directory__avatar eum-directory__avatar--small') . '<span>' . esc_html($manager_label) . '</span></div></td>';
+        echo '<td data-label="Manager"><div class="eum-directory__manager">' . EUM_Profiles::profile_avatar_html((int)$row['manager_id'], 26, 'eum-directory__avatar eum-directory__avatar--small') . '<span>' . esc_html($manager_label) . '</span></div></td>';
       } else {
-        echo '<td>' . esc_html($manager_label) . '</td>';
+        echo '<td data-label="Manager">' . esc_html($manager_label) . '</td>';
       }
-      echo '<td>' . esc_html((string)($row['report_level_label'] ?? '—')) . '</td>';
-      if ($terminated) echo '<td>' . esc_html($status) . '</td>';
-      echo '<td><div class="eum-directory__actions">';
+      echo '<td data-label="Relationship">' . esc_html((string)($row['report_level_label'] ?? '—')) . '</td>';
+      if ($terminated) echo '<td data-label="Status">' . esc_html($status) . '</td>';
+      echo '<td class="eum-directory__cell--actions" data-label="Actions"><div class="eum-directory__actions">';
       $actor_user_id = get_current_user_id();
       $target_user_id = (int)$row['ID'];
       $can_edit = $actor_user_id !== $target_user_id && class_exists('EUM_Profiles')
@@ -1335,29 +1389,35 @@ class EUM_Manager_Portal {
   }
 
   private function record_bulk_change_entry(int $target_user_id, int $actor_user_id, array $after, string $reason, bool $skip_log, bool $skip_email): void {
-    if ((!$skip_log || !$skip_email) && class_exists('EUM_Profiles')) {
-      $user = get_user_by('id', $target_user_id);
-      $change_id = (int)wp_insert_post([
-        'post_type' => EUM_Profiles::CPT_CHANGE,
-        'post_status' => 'publish',
-        'post_title' => 'Bulk Team Edit - ' . ($user ? ($user->display_name ?: $user->user_login) : ('User #' . $target_user_id)),
-        'post_author' => $actor_user_id,
-      ]);
-      if ($change_id > 0) {
-        update_post_meta($change_id, EUM_Profiles::META_TARGET_USER, $target_user_id);
-        update_post_meta($change_id, EUM_Profiles::META_ACTOR_USER, $actor_user_id);
-        update_post_meta($change_id, EUM_Profiles::META_BEFORE, []);
-        update_post_meta($change_id, EUM_Profiles::META_AFTER, $after);
-        update_post_meta($change_id, EUM_Profiles::META_NOTE, $reason);
-        update_post_meta($change_id, EUM_Profiles::META_OCCURRED_AT, current_time('mysql'));
-        update_post_meta($change_id, EUM_Profiles::META_STATUS, 'applied');
-        update_post_meta($change_id, EUM_Profiles::META_MANUAL, $skip_email ? 1 : 0);
-        if (!$skip_email) {
-          do_action('eum_profile_change_applied', $change_id, $target_user_id);
+    try {
+      if ((!$skip_log || !$skip_email) && class_exists('EUM_Profiles')) {
+        $user = get_user_by('id', $target_user_id);
+        $change_id = (int)wp_insert_post([
+          'post_type' => EUM_Profiles::CPT_CHANGE,
+          'post_status' => 'publish',
+          'post_title' => 'Bulk Team Edit - ' . ($user ? ($user->display_name ?: $user->user_login) : ('User #' . $target_user_id)),
+          'post_author' => $actor_user_id,
+        ]);
+        if ($change_id > 0) {
+          update_post_meta($change_id, EUM_Profiles::META_TARGET_USER, $target_user_id);
+          update_post_meta($change_id, EUM_Profiles::META_ACTOR_USER, $actor_user_id);
+          update_post_meta($change_id, EUM_Profiles::META_BEFORE, []);
+          update_post_meta($change_id, EUM_Profiles::META_AFTER, $after);
+          update_post_meta($change_id, EUM_Profiles::META_NOTE, $reason);
+          update_post_meta($change_id, EUM_Profiles::META_OCCURRED_AT, current_time('mysql'));
+          update_post_meta($change_id, EUM_Profiles::META_STATUS, 'applied');
+          update_post_meta($change_id, EUM_Profiles::META_MANUAL, $skip_email ? 1 : 0);
+          if (!$skip_email) {
+            do_action('eum_profile_change_applied', $change_id, $target_user_id);
+          }
+          if ($skip_log) {
+            wp_delete_post($change_id, true);
+          }
         }
-        if ($skip_log) {
-          wp_delete_post($change_id, true);
-        }
+      }
+    } catch (Throwable $e) {
+      if (function_exists('eum_log_message')) {
+        eum_log_message('[EUM Manager Bulk] Profile update completed for user #' . $target_user_id . ', but audit/notification handling failed (' . get_class($e) . ') at ' . basename($e->getFile()) . ':' . (int)$e->getLine() . ': ' . sanitize_text_field($e->getMessage()));
       }
     }
   }
@@ -1459,10 +1519,13 @@ class EUM_Manager_Portal {
         if ($did_update) $updated++;
         else $errors[] = '#' . (int)$target_user_id . ': No editable fields were applied.';
       } catch (Throwable $e) {
+        $detail = sanitize_text_field($e->getMessage());
+        if ($detail === '') $detail = 'The server returned no error description.';
+        $detail = substr($detail, 0, 320);
         if (function_exists('eum_log_message')) {
-          eum_log_message('[EUM Manager Bulk] Update failed for user #' . (int)$target_user_id . ': ' . $e->getMessage());
+          eum_log_message('[EUM Manager Bulk] Update failed for user #' . (int)$target_user_id . ' (' . get_class($e) . ') at ' . basename($e->getFile()) . ':' . (int)$e->getLine() . ': ' . $detail);
         }
-        $errors[] = '#' . (int)$target_user_id . ': A server error stopped this user’s update.';
+        $errors[] = '#' . (int)$target_user_id . ': ' . get_class($e) . ': ' . $detail . ' Some fields may have saved before the error; check this user before retrying.';
       }
     }
 

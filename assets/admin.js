@@ -1260,7 +1260,9 @@
     var popupRoot = document.getElementById('eum-popup-root');
     var openPopupRoot = popupRoot && popupRoot.classList.contains('is-open');
     if (!openTeamBulkModal && !openPopupRoot) document.body.classList.remove('eum-popup-open');
-    if (options && options.pushState) {
+    if (options && options.replaceState) {
+      window.history.replaceState({ eumAjaxRegions: keys.slice() }, '', responseUrl || window.location.href);
+    } else if (options && options.pushState) {
       window.history.pushState({ eumAjaxRegions: keys.slice() }, '', responseUrl || window.location.href);
     }
     return true;
@@ -1268,6 +1270,7 @@
 
   function requestAjaxRegions(regions, keys, url, options) {
     var isPost = !!(options && options.isPost);
+    var silent = !!(options && options.silent);
     if (!regions.length) {
       if (isPost) showAjaxStatus('Could not start the save because the Employee List section is unavailable. Reload the page and try again.', true, 12000);
       return Promise.resolve(false);
@@ -1282,7 +1285,7 @@
       region.setAttribute('aria-busy', 'true');
     });
     ajaxRequestCount++;
-    showAjaxStatus(options && options.isPost ? 'Saving…' : 'Updating…', false);
+    if (!silent) showAjaxStatus(options && options.isPost ? 'Saving…' : 'Updating…', false);
     var fetchOptions = {
       method: options && options.method ? options.method : 'GET',
       credentials: 'same-origin',
@@ -1327,6 +1330,7 @@
               var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });
               var replaced = currentRegions.every(function (region) { return !!region; }) && replaceAjaxRegions(currentRegions, keys, refreshHtml, refreshResponse.url || refreshUrl.toString(), {
                 pushState: !(options && options.popstate),
+                replaceState: !!(options && options.replaceState),
                 strictTargets: !!(options && options.strictTargets),
                 preventFallback: true
               });
@@ -1360,17 +1364,19 @@
           return false;
         }
         var replaced = replaceAjaxRegions(currentRegions, keys, html, response.url || url, {
-          pushState: !(options && options.popstate),
+          pushState: options && typeof options.pushState === 'boolean' ? options.pushState : !(options && options.popstate),
+          replaceState: !!(options && options.replaceState),
           strictTargets: !!(options && options.strictTargets),
           fallbackOnMissing: !!(options && options.isPost),
           preventFallback: isPost
         });
-        if (replaced && notice) {
+        if (replaced && notice && !silent) {
           var noticeType = notice.getAttribute('data-eum-notice-type');
           showAjaxStatus(notice.textContent.trim(), noticeType === 'error' || noticeType === 'warning', isPost ? 10000 : undefined);
         }
         else if (replaced && isPost) showAjaxStatus('The Employee List refreshed, but the server did not confirm whether the bulk changes were applied. Check the selected users before retrying.', true, 12000);
-        else if (replaced) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
+        else if (replaced && silent) { /* Live search refreshes without a toast. */ }
+        else if (replaced && !silent) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
         else if (isPost && notice) showAjaxStatus(notice.textContent.trim(), notice.getAttribute('data-eum-notice-type') === 'error' || notice.getAttribute('data-eum-notice-type') === 'warning', 10000);
         else if (isPost) showAjaxStatus('The server response did not include the Employee List. The bulk update could not be confirmed; reload before retrying.', true, 12000);
         else showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
@@ -1394,6 +1400,45 @@
       return result;
     });
   }
+
+  var liveDirectorySearchTimer = 0;
+  var liveDirectorySearchSerial = 0;
+  var liveDirectorySearchValue = '';
+  var liveDirectorySearchLastUrl = '';
+
+  function runLiveDirectorySearch(serial) {
+    if (serial !== liveDirectorySearchSerial) return;
+    var region = document.querySelector(regionSelector('manager-directory'));
+    var input = region ? region.querySelector('[data-eum-live-directory-search="1"]') : null;
+    if (!region || !input || !input.form) return;
+    if (region.getAttribute('data-eum-ajax-busy') === '1') {
+      liveDirectorySearchTimer = window.setTimeout(function () { runLiveDirectorySearch(serial); }, 80);
+      return;
+    }
+    if (input.value !== liveDirectorySearchValue) input.value = liveDirectorySearchValue;
+    var url = buildGetUrl(input.form, null);
+    ['eum_team_msg', 'eum_team_type', 'eum_email_list'].forEach(function (key) { url.searchParams.delete(key); });
+    var requestUrl = url.toString();
+    if (requestUrl === liveDirectorySearchLastUrl) return;
+    liveDirectorySearchLastUrl = requestUrl;
+    var targets = ajaxTargetsFor(input.form, region);
+    requestAjaxRegions(targets.regions, targets.keys, requestUrl, {
+      method: 'GET',
+      strictTargets: targets.strict,
+      silent: true,
+      replaceState: true
+    });
+  }
+
+  document.addEventListener('input', function (event) {
+    var input = event.target.closest('[data-eum-live-directory-search="1"]');
+    if (!input) return;
+    liveDirectorySearchValue = input.value;
+    liveDirectorySearchSerial++;
+    var serial = liveDirectorySearchSerial;
+    window.clearTimeout(liveDirectorySearchTimer);
+    liveDirectorySearchTimer = window.setTimeout(function () { runLiveDirectorySearch(serial); }, 220);
+  });
 
   document.addEventListener('click', function (event) {
     var addButton = event.target.closest('[data-eum-preapproved-bulk-add-row]');
@@ -1437,6 +1482,12 @@
     if (!targets.regions.length) return;
     var method = String(form.method || 'get').toUpperCase();
     if (method === 'GET') {
+      if (form.querySelector('[data-eum-live-directory-search="1"]')) {
+        window.clearTimeout(liveDirectorySearchTimer);
+        liveDirectorySearchSerial++;
+        var liveSearchInput = form.querySelector('[data-eum-live-directory-search="1"]');
+        liveDirectorySearchValue = liveSearchInput ? liveSearchInput.value : '';
+      }
       var getUrl = buildGetUrl(form, event.submitter);
       if (getUrl.origin !== window.location.origin) return;
       event.preventDefault();
@@ -1486,6 +1537,12 @@
     try { url = new URL(link.href, window.location.href); } catch (error) { return; }
     if (url.origin !== window.location.origin || url.hash && url.href.split('#')[0] === window.location.href.split('#')[0]) return;
     event.preventDefault();
+    if (link.closest('.eum-directory__filter-actions') && link.textContent.trim().toLowerCase() === 'reset') {
+      window.clearTimeout(liveDirectorySearchTimer);
+      liveDirectorySearchSerial++;
+      liveDirectorySearchValue = '';
+      liveDirectorySearchLastUrl = '';
+    }
     requestAjaxRegions(targets.regions, targets.keys, url.toString(), { method: 'GET', strictTargets: targets.strict });
   }, true);
 

@@ -2578,3 +2578,215 @@ body:not(.wp-admin) :where(
     width: auto;
   }
 }
+
+/* Manager team and employee directories */
+.eum-directory {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 1480px);
+  margin-inline: auto;
+  min-width: 0;
+}
+.eum-directory__hero {
+  margin: 0;
+  border-left: 4px solid #2563eb !important;
+  background: linear-gradient(115deg, #fff 0%, #f3f7ff 100%) !important;
+}
+.eum-directory__hero p {
+  max-width: 70ch;
+  line-height: 1.55;
+}
+.eum-directory__filters {
+  margin: 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+}
+.eum-directory__search-field {
+  grid-column: 1 / -1;
+}
+.eum-directory__search-field input {
+  min-height: 48px !important;
+  font-size: 16px;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .04);
+}
+.eum-directory__search-field input:focus {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .14) !important;
+  outline: 0;
+}
+.eum-directory__search-field small {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.eum-directory__filter-actions {
+  align-items: center;
+}
+.eum-directory__filter-actions .button,
+.eum-directory__bulk-toolbar .button {
+  min-height: 40px;
+}
+.eum-directory__panel {
+  margin-top: 0;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .045);
+}
+.eum-directory__panel-head {
+  min-height: 54px;
+}
+.eum-directory__panel-head > span {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 10px;
+  border: 1px solid #dbe4ef;
+  border-radius: 999px;
+  background: #fff;
+  font-weight: 600;
+}
+.eum-directory__table-wrap {
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+}
+.eum-directory__table {
+  min-width: 980px;
+}
+.eum-directory__table th,
+.eum-directory__table td {
+  padding: 12px 14px;
+  line-height: 1.45;
+}
+.eum-directory__table tbody tr:nth-child(even) {
+  background: #fbfcfe;
+}
+.eum-directory__table tbody tr:hover {
+  background: #f2f7ff;
+}
+.eum-directory__table td {
+  overflow-wrap: anywhere;
+}
+.eum-directory__person-details strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+.eum-directory__person-details span {
+  overflow-wrap: anywhere;
+}
+.eum-directory__cell--actions {
+  min-width: 190px;
+}
+.eum-directory__actions .button {
+  min-height: 34px;
+  padding: 6px 11px !important;
+}
+.eum-directory__empty {
+  margin-top: 0;
+  padding: 24px;
+  text-align: center;
+  background: #f8fafc;
+}
+@media (max-width: 900px) {
+  .eum-directory__table {
+    min-width: 860px;
+  }
+}
+@media (max-width: 680px) {
+  .eum-directory__table-wrap {
+    overflow: visible;
+  }
+  .eum-directory__table,
+  .eum-directory__table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .eum-directory__table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .eum-directory__table tbody {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+  }
+  .eum-directory__table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid #dbe4ef;
+    border-radius: 14px;
+    background: #fff !important;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, .045);
+  }
+  .eum-directory__table tbody td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 10px 12px;
+    border-bottom: 1px solid #edf1f6;
+    text-align: right;
+  }
+  .eum-directory__table tbody td::before {
+    flex: 0 0 auto;
+    color: #64748b;
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .045em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+  .eum-directory__table tbody td.eum-directory__select-col {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding-block: 8px;
+    background: #f8fafc;
+    text-align: left;
+  }
+  .eum-directory__table tbody td.eum-directory__cell--person {
+    grid-column: 1 / -1;
+    order: -1;
+    display: block;
+    text-align: left;
+  }
+  .eum-directory__table tbody td.eum-directory__cell--person::before {
+    content: none;
+  }
+  .eum-directory__table tbody td[data-label="Job Path"],
+  .eum-directory__table tbody td[data-label="Location"],
+  .eum-directory__table tbody td[data-label="Manager"],
+  .eum-directory__table tbody td[data-label="Status"],
+  .eum-directory__table tbody td.eum-directory__cell--actions {
+    grid-column: 1 / -1;
+  }
+  .eum-directory__table tbody td.eum-directory__cell--actions {
+    display: block;
+    text-align: left;
+  }
+  .eum-directory__table tbody td.eum-directory__cell--actions::before {
+    display: block;
+    margin-bottom: 8px;
+  }
+  body:not(.wp-admin) .eum-directory .eum-directory__actions {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .eum-directory__actions .button {
+    width: auto !important;
+    min-height: 36px;
+  }
+}
