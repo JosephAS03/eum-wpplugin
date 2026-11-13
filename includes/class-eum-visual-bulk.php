@@ -1238,17 +1238,6 @@ class EUM_Visual_Bulk {
       }
     }
 
-    if (!empty($custom_defs) && class_exists('EUM_Fields')) {
-      $custom_values = (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true);
-      foreach ($custom_defs as $custom_key => $type) {
-        $field_key = 'custom:' . $custom_key;
-        if (!array_key_exists($field_key, $row)) continue;
-        $raw = is_scalar($row[$field_key]) ? (string)$row[$field_key] : '';
-        $custom_values[$custom_key] = $raw === '' ? '' : EUM_Fields::sanitize_field_value($custom_key, $type, $raw);
-      }
-      update_user_meta($user_id, EUM_Fields::USER_META_KEY, $custom_values);
-    }
-
     $job_division_touched = array_key_exists('job_company_override', $row);
     if ($job_division_touched) {
       $division = sanitize_text_field((string)$row['job_company_override']);
@@ -1278,6 +1267,21 @@ class EUM_Visual_Bulk {
     } elseif (class_exists('EUM_Assignments')) {
       $syncer = new EUM_Assignments();
       if (method_exists($syncer, 'sync_user')) $syncer->sync_user($user_id);
+    }
+
+    // Classification sync can apply inherited values from the newly selected Job Path.
+    // Reapply only explicitly selected custom fields afterward so those edits take precedence.
+    if (!empty($custom_defs) && class_exists('EUM_Fields')) {
+      $custom_values = (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true);
+      $custom_values_changed = false;
+      foreach ($custom_defs as $custom_key => $type) {
+        $field_key = 'custom:' . $custom_key;
+        if (!array_key_exists($field_key, $row)) continue;
+        $raw = is_scalar($row[$field_key]) ? (string)$row[$field_key] : '';
+        $custom_values[$custom_key] = $raw === '' ? '' : EUM_Fields::sanitize_field_value($custom_key, $type, $raw);
+        $custom_values_changed = true;
+      }
+      if ($custom_values_changed) update_user_meta($user_id, EUM_Fields::USER_META_KEY, $custom_values);
     }
 
     if ($reason !== '' && class_exists('EUM_Profiles')) {

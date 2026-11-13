@@ -1113,7 +1113,7 @@ class EUM_Manager_Portal {
     $defs = [];
     foreach (array_values(array_filter(array_map('strval', $allowed))) as $field_id) {
       if (!isset($catalog[$field_id])) continue;
-      if (in_array($field_id, ['core:user_pass', 'core:user_email', 'core:job_company', 'custom:job_title'], true)) continue;
+      if (in_array($field_id, ['core:user_pass', 'core:user_email', 'core:job_company', 'custom:employee_id', 'custom:job_title'], true)) continue;
       $defs[$field_id] = $catalog[$field_id];
     }
     if (class_exists('EUM_Personnel')) {

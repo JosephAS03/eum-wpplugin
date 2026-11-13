@@ -27,8 +27,8 @@ class EUM_Plugin {
   }
 
   public function enqueue_assets(): void {
-    $css_version = file_exists(EUM_PLUGIN_DIR . 'assets/admin.css') ? (string)filemtime(EUM_PLUGIN_DIR . 'assets/admin.css') : EUM_VERSION;
-    $js_version = file_exists(EUM_PLUGIN_DIR . 'assets/admin.js') ? (string)filemtime(EUM_PLUGIN_DIR . 'assets/admin.js') : EUM_VERSION;
+    $css_version = (defined('EUM_VERSION') ? EUM_VERSION . '-' : '') . (file_exists(EUM_PLUGIN_DIR . 'assets/admin.css') ? (string)filemtime(EUM_PLUGIN_DIR . 'assets/admin.css') : 'asset');
+    $js_version = (defined('EUM_VERSION') ? EUM_VERSION . '-' : '') . (file_exists(EUM_PLUGIN_DIR . 'assets/admin.js') ? (string)filemtime(EUM_PLUGIN_DIR . 'assets/admin.js') : 'asset');
     wp_enqueue_style('eum-ui', EUM_PLUGIN_URL . 'assets/admin.css', [], $css_version);
     wp_enqueue_script('eum-ui', EUM_PLUGIN_URL . 'assets/admin.js', [], $js_version, true);
   }
