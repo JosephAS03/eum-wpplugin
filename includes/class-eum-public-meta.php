@@ -3,6 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 class EUM_Public_Meta {
   const RULES_OPTION = 'eum_public_meta_conditional_rules';
+  const GROUP_LABELS_PAGE_SLUG = 'eum-public-group-labels';
   const STATUS_RULES_OPTION = 'eum_public_meta_activation_rules';
   const USER_OVERRIDES_META = '_eum_public_meta_overrides';
   const JOB_TITLE_META = '_eum_public_meta_values';
@@ -96,6 +97,7 @@ class EUM_Public_Meta {
     add_action('admin_post_eum_public_meta_bulk_sync', [$this, 'handle_bulk_sync']);
     add_action('admin_post_eum_public_meta_bulk_sync_rule', [$this, 'handle_rule_bulk_sync']);
     add_action('admin_post_eum_public_meta_check_user_rules', [$this, 'handle_user_rule_check']);
+    add_action('admin_post_eum_public_meta_save_group_labels', [$this, 'handle_group_labels_save']);
     add_action('added_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('updated_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
     add_action('deleted_user_meta', [$this, 'maybe_sync_user_from_meta'], 80, 4);
@@ -548,6 +550,71 @@ class EUM_Public_Meta {
 
   public function admin_menu(): void {
     add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Public Metadata Rules', 'Public Metadata Rules', 'read', 'eum-public-meta', [$this, 'render_rules_page']);
+    add_submenu_page(EUM_Admin::parent_slug('workforce'), 'Group Label Additions', 'Group Label Additions', 'read', self::GROUP_LABELS_PAGE_SLUG, [$this, 'render_group_labels_page']);
+  }
+
+  public function render_group_labels_page(): void {
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr((int)get_current_user_id())) wp_die('Not allowed.');
+    $groups = taxonomy_exists('eum_user_group')
+      ? get_terms(['taxonomy' => 'eum_user_group', 'hide_empty' => false, 'orderby' => 'name', 'order' => 'ASC'])
+      : [];
+    if (is_wp_error($groups)) $groups = [];
+
+    echo '<div class="wrap"><h1>Group Label Additions</h1>';
+    if (!empty($_GET['eum_group_labels_msg'])) {
+      $message = sanitize_text_field((string)wp_unslash($_GET['eum_group_labels_msg']));
+      $type = sanitize_key((string)wp_unslash($_GET['eum_group_labels_type'] ?? 'success'));
+      echo '<div class="notice ' . ($type === 'error' ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($message) . '</p></div>';
+    }
+    echo '<p>Set labels that are added to each group member’s Public Labels. These additions are combined with rule and user values, and disappear when a user leaves the group.</p>';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+    echo '<input type="hidden" name="action" value="eum_public_meta_save_group_labels">';
+    wp_nonce_field('eum_public_meta_save_group_labels', 'eum_public_meta_group_labels_nonce');
+    if (empty($groups)) {
+      echo '<p>No user groups exist yet.</p>';
+    } else {
+      echo '<table class="widefat striped"><thead><tr><th scope="col">Group</th><th scope="col">Labels to add</th></tr></thead><tbody>';
+      foreach ($groups as $group) {
+        $term_id = (int)$group->term_id;
+        $labels = (string)get_term_meta($term_id, self::GROUP_LABELS_TERM_META, true);
+        echo '<tr><th scope="row"><label for="eum-group-public-labels-' . $term_id . '">' . esc_html((string)$group->name) . '</label></th>';
+        echo '<td><input type="text" class="regular-text" style="width:min(560px,100%)" id="eum-group-public-labels-' . $term_id . '" name="group_labels[' . $term_id . ']" value="' . esc_attr($labels) . '" placeholder="Recruiting, Leadership"><p class="description">Comma-separated. Leave blank to remove this group’s additions.</p></td></tr>';
+      }
+      echo '</tbody></table>';
+      echo '<p><button type="submit" class="button button-primary">Save Group Label Additions</button></p>';
+    }
+    echo '</form></div>';
+  }
+
+  public function handle_group_labels_save(): void {
+    $actor_user_id = (int)get_current_user_id();
+    if (!class_exists('EUM_Access') || !EUM_Access::is_it_or_hr($actor_user_id)) wp_die('Not allowed.', 'Not allowed', ['response' => 403]);
+    check_admin_referer('eum_public_meta_save_group_labels', 'eum_public_meta_group_labels_nonce');
+    if (!taxonomy_exists('eum_user_group')) wp_die('User Groups are unavailable.');
+
+    $posted = isset($_POST['group_labels']) && is_array($_POST['group_labels']) ? wp_unslash($_POST['group_labels']) : [];
+    $updated = 0;
+    foreach ($posted as $raw_term_id => $raw_labels) {
+      $term_id = absint($raw_term_id);
+      if ($term_id <= 0 || !is_scalar($raw_labels)) continue;
+      $term = get_term($term_id, 'eum_user_group');
+      if (!$term || is_wp_error($term)) continue;
+      $labels = self::sanitize_value('public_labels', (string)$raw_labels);
+      $current = (string)get_term_meta($term_id, self::GROUP_LABELS_TERM_META, true);
+      if ($labels === $current) continue;
+      if ($labels === '') delete_term_meta($term_id, self::GROUP_LABELS_TERM_META);
+      else update_term_meta($term_id, self::GROUP_LABELS_TERM_META, $labels);
+      self::sync_users_for_group($term_id);
+      $updated++;
+    }
+
+    $target_url = add_query_arg([
+      'page' => self::GROUP_LABELS_PAGE_SLUG,
+      'eum_group_labels_msg' => sprintf('Saved changes for %d group(s).', $updated),
+      'eum_group_labels_type' => 'success',
+    ], admin_url('admin.php'));
+    wp_safe_redirect($target_url);
+    exit;
   }
 
   public function render_rules_page(): void {
@@ -555,6 +622,7 @@ class EUM_Public_Meta {
     $rules = self::conditional_rules();
     $next_index = count($rules);
     echo '<div class="wrap"><h1>Public Metadata Rules</h1>';
+    echo '<p><a class="button" href="' . esc_url(admin_url('admin.php?page=' . self::GROUP_LABELS_PAGE_SLUG)) . '">Manage Group Label Additions</a></p>';
     if (!empty($_GET['eum_public_meta_msg'])) {
       $message = sanitize_text_field((string)wp_unslash($_GET['eum_public_meta_msg']));
       $type = sanitize_key((string)wp_unslash($_GET['eum_public_meta_type'] ?? 'success'));
