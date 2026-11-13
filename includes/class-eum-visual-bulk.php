@@ -978,7 +978,7 @@ class EUM_Visual_Bulk {
       case 'manager_user_id':
         return class_exists('EUM_Personnel') ? (string)((int)get_user_meta($user_id, EUM_Personnel::META_MANAGER_ID, true)) : '';
       case 'manager_id_override':
-        return class_exists('EUM_Manager_IDs') ? (string)((int)get_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE, true)) : '';
+        return class_exists('EUM_Manager_IDs') ? (string)((int)get_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID, true)) : '';
       case 'it_access':
         return class_exists('EUM_Access') && EUM_Access::is_it_user($user_id) ? '1' : '0';
       case 'hr_access':
@@ -1174,8 +1174,8 @@ class EUM_Visual_Bulk {
 
     if (array_key_exists('manager_id_override', $row) && class_exists('EUM_Manager_IDs')) {
       $override = max(0, (int)$row['manager_id_override']);
-      if ($override > 0) update_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE, $override);
-      else delete_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE);
+      if ($override > 0) update_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID, $override);
+      else delete_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID);
     }
 
     if (array_key_exists('it_access', $row) && class_exists('EUM_Access')) {

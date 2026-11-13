@@ -256,7 +256,7 @@ class EUM_Bulk {
 
     $custom_fields = class_exists('EUM_Fields') ? (array)get_user_meta($user_id, EUM_Fields::USER_META_KEY, true) : [];
     $manager_user_id = class_exists('EUM_Personnel') ? (int)get_user_meta($user_id, EUM_Personnel::META_MANAGER_ID, true) : 0;
-    $override_manager_id = class_exists('EUM_Manager_IDs') ? (int)get_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE, true) : 0;
+    $override_manager_id = class_exists('EUM_Manager_IDs') ? (int)get_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID, true) : 0;
     $effective_manager_id = ($mgr && method_exists($mgr, 'resolve_effective_manager_id_for_user')) ? (int)$mgr->resolve_effective_manager_id_for_user($user_id) : 0;
 
     $row = [
@@ -518,8 +518,8 @@ class EUM_Bulk {
 
     if (class_exists('EUM_Manager_IDs') && $this->should_apply_scalar($assoc, 'manager_id_override', $clear_blanks)) {
       $override = $this->cell_int_assoc($assoc, 'manager_id_override');
-      if ($override > 0) update_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE, $override);
-      else delete_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE);
+      if ($override > 0) update_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID, $override);
+      else delete_user_meta($user_id, EUM_Manager_IDs::USER_META_OVERRIDE_ID);
     }
 
     if ($this->should_apply_scalar($assoc, 'it_access', $clear_blanks)) {
