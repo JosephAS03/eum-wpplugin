@@ -1417,57 +1417,57 @@ class EUM_Manager_Portal {
     $updated = 0;
     $errors = [];
     foreach ($selected_ids as $target_user_id) {
-      $valid_reasons = class_exists('EUM_Profiles') ? EUM_Profiles::reason_options_for_actor($actor_user_id, (int)$target_user_id) : [];
-      if (($has_profile_changes || $has_employment_changes || $has_redirect_change) && !in_array($reason, $valid_reasons, true)) {
-        $errors[] = '#' . (int)$target_user_id . ': The selected reason is not valid for this user.';
-        continue;
-      }
-      $did_update = false;
-      if ($has_employment_changes && !$has_profile_changes && class_exists('EUM_Personnel')) {
-        $terminated = array_key_exists('employment:terminated', $field_values)
-          ? in_array((string)$field_values['employment:terminated'], ['1', 'true', 'yes'], true)
-          : EUM_Personnel::is_terminated((int)$target_user_id);
-        $rehirable = array_key_exists('employment:rehirable', $field_values)
-          ? in_array((string)$field_values['employment:rehirable'], ['1', 'true', 'yes'], true)
-          : EUM_Personnel::is_rehirable((int)$target_user_id);
-        EUM_Personnel::set_employment_status((int)$target_user_id, $terminated, $rehirable, $actor_user_id);
-        $did_update = true;
-        if (class_exists('EUM_Access') && EUM_Access::is_it_or_hr($actor_user_id)) {
-          $this->record_bulk_change_entry((int)$target_user_id, $actor_user_id, $field_values, $reason, $skip_log, $skip_email);
-        }
-      } elseif (!empty($row)) {
-        try {
-          $result = $helper->apply_row_for_actor($actor_user_id, (int)$target_user_id, $row, false);
-        } catch (Throwable $e) {
-          $result = new WP_Error('bulk_update_exception', 'Bulk update failed: ' . $e->getMessage());
-        }
-        if (is_wp_error($result)) {
-          $errors[] = '#' . (int)$target_user_id . ': ' . $result->get_error_message();
+      try {
+        $valid_reasons = class_exists('EUM_Profiles') ? EUM_Profiles::reason_options_for_actor($actor_user_id, (int)$target_user_id) : [];
+        if (($has_profile_changes || $has_employment_changes || $has_redirect_change) && !in_array($reason, $valid_reasons, true)) {
+          $errors[] = '#' . (int)$target_user_id . ': The selected reason is not valid for this user.';
           continue;
         }
-        $did_update = true;
-        if (class_exists('EUM_Access') && EUM_Access::is_it_or_hr($actor_user_id)) {
-          try {
+        $did_update = false;
+        if ($has_employment_changes && !$has_profile_changes && class_exists('EUM_Personnel')) {
+          $terminated = array_key_exists('employment:terminated', $field_values)
+            ? in_array((string)$field_values['employment:terminated'], ['1', 'true', 'yes'], true)
+            : EUM_Personnel::is_terminated((int)$target_user_id);
+          $rehirable = array_key_exists('employment:rehirable', $field_values)
+            ? in_array((string)$field_values['employment:rehirable'], ['1', 'true', 'yes'], true)
+            : EUM_Personnel::is_rehirable((int)$target_user_id);
+          EUM_Personnel::set_employment_status((int)$target_user_id, $terminated, $rehirable, $actor_user_id);
+          $did_update = true;
+          if (class_exists('EUM_Access') && EUM_Access::is_it_or_hr($actor_user_id)) {
             $this->record_bulk_change_entry((int)$target_user_id, $actor_user_id, $field_values, $reason, $skip_log, $skip_email);
-          } catch (Throwable $e) {
-            if (function_exists('eum_log_message')) eum_log_message('[EUM Manager Bulk] Could not write audit entry for user #' . (int)$target_user_id . ': ' . $e->getMessage());
+          }
+        } elseif (!empty($row)) {
+          $result = $helper->apply_row_for_actor($actor_user_id, (int)$target_user_id, $row, false);
+          if (is_wp_error($result)) {
+            $errors[] = '#' . (int)$target_user_id . ': ' . $result->get_error_message();
+            continue;
+          }
+          $did_update = true;
+          if (class_exists('EUM_Access') && EUM_Access::is_it_or_hr($actor_user_id)) {
+            $this->record_bulk_change_entry((int)$target_user_id, $actor_user_id, $field_values, $reason, $skip_log, $skip_email);
           }
         }
-      }
 
-      if ($has_redirect_change) {
-        $redirect_result = $redirect_action === 'clear'
-          ? EUM_Access::clear_one_time_login_redirect($actor_user_id, (int)$target_user_id, $reason)
-          : EUM_Access::set_one_time_login_redirect($actor_user_id, (int)$target_user_id, $redirect_destination, $reason);
-        if (is_wp_error($redirect_result)) {
-          $errors[] = '#' . (int)$target_user_id . ': ' . $redirect_result->get_error_message();
-          if ($did_update) $updated++;
-          continue;
+        if ($has_redirect_change) {
+          $redirect_result = $redirect_action === 'clear'
+            ? EUM_Access::clear_one_time_login_redirect($actor_user_id, (int)$target_user_id, $reason)
+            : EUM_Access::set_one_time_login_redirect($actor_user_id, (int)$target_user_id, $redirect_destination, $reason);
+          if (is_wp_error($redirect_result)) {
+            $errors[] = '#' . (int)$target_user_id . ': ' . $redirect_result->get_error_message();
+            if ($did_update) $updated++;
+            continue;
+          }
+          $did_update = true;
         }
-        $did_update = true;
-      }
 
-      if ($did_update) $updated++;
+        if ($did_update) $updated++;
+        else $errors[] = '#' . (int)$target_user_id . ': No editable fields were applied.';
+      } catch (Throwable $e) {
+        if (function_exists('eum_log_message')) {
+          eum_log_message('[EUM Manager Bulk] Update failed for user #' . (int)$target_user_id . ': ' . $e->getMessage());
+        }
+        $errors[] = '#' . (int)$target_user_id . ': A server error stopped this user’s update.';
+      }
     }
 
     $parts = [];

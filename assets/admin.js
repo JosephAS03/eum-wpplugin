@@ -1085,7 +1085,7 @@
     return '[data-eum-ajax-region="' + String(key || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]';
   }
 
-  function showAjaxStatus(message, isError) {
+  function showAjaxStatus(message, isError, duration) {
     var status = document.getElementById('eum-ajax-status');
     if (!status) {
       status = document.createElement('div');
@@ -1100,7 +1100,7 @@
     status.hidden = false;
     window.clearTimeout(status._eumTimer);
     if (message !== 'Updating…' && message !== 'Saving…') {
-      status._eumTimer = window.setTimeout(function () { if (status.parentNode) status.parentNode.removeChild(status); }, isError ? 7000 : 2200);
+      status._eumTimer = window.setTimeout(function () { if (status.parentNode) status.parentNode.removeChild(status); }, Number(duration) > 0 ? Number(duration) : (isError ? 7000 : 2200));
     }
     return status;
   }
@@ -1243,7 +1243,7 @@
     var parsed = parser.parseFromString(html, 'text/html');
     var replacements = keys.map(function (key) { return parsed.querySelector(regionSelector(key)); });
     if (replacements.some(function (replacement) { return !replacement; })) {
-      if (!(options && options.strictTargets) || (options && options.fallbackOnMissing)) window.location.assign(responseUrl || window.location.href);
+      if (!(options && options.preventFallback) && (!(options && options.strictTargets) || (options && options.fallbackOnMissing))) window.location.assign(responseUrl || window.location.href);
       return false;
     }
     var updatedRegions = [];
@@ -1267,7 +1267,15 @@
   }
 
   function requestAjaxRegions(regions, keys, url, options) {
-    if (!regions.length || regions.some(function (region) { return region.getAttribute('data-eum-ajax-busy') === '1'; })) return Promise.resolve(false);
+    var isPost = !!(options && options.isPost);
+    if (!regions.length) {
+      if (isPost) showAjaxStatus('Could not start the save because the Employee List section is unavailable. Reload the page and try again.', true, 12000);
+      return Promise.resolve(false);
+    }
+    if (regions.some(function (region) { return region.getAttribute('data-eum-ajax-busy') === '1'; })) {
+      if (isPost) showAjaxStatus('A save is already in progress. Wait for it to finish before submitting again.', true, 10000);
+      return Promise.resolve(false);
+    }
     activeAjaxRegionKeys = keys.slice();
     regions.forEach(function (region) {
       region.setAttribute('data-eum-ajax-busy', '1');
@@ -1289,24 +1297,36 @@
         var notice = responseDocument.querySelector('[data-eum-job-notice="1"], [data-eum-team-bulk-notice="1"]');
         var currentRegions = keys.map(function (key) { return document.querySelector(regionSelector(key)); });
         if (currentRegions.some(function (region) { return !region; })) {
-          if (options && options.isPost) window.location.assign(response.url || url);
+          if (isPost) {
+            if (notice) showAjaxStatus(notice.textContent.trim(), notice.getAttribute('data-eum-notice-type') === 'error' || notice.getAttribute('data-eum-notice-type') === 'warning', 10000);
+            else {
+              var responseMessage = response.status >= 400
+                ? 'The server rejected the bulk update (HTTP ' + response.status + '). No success was confirmed.'
+                : 'The server responded without the Employee List section. The bulk update could not be confirmed; reload the list before retrying.';
+              showAjaxStatus(responseMessage, true, 12000);
+            }
+          }
           return false;
         }
         var replaced = replaceAjaxRegions(currentRegions, keys, html, response.url || url, {
           pushState: !(options && options.popstate),
           strictTargets: !!(options && options.strictTargets),
-          fallbackOnMissing: !!(options && options.isPost)
+          fallbackOnMissing: !!(options && options.isPost),
+          preventFallback: isPost
         });
         if (replaced && notice) {
           var noticeType = notice.getAttribute('data-eum-notice-type');
-          showAjaxStatus(notice.textContent.trim(), noticeType === 'error' || noticeType === 'warning');
+          showAjaxStatus(notice.textContent.trim(), noticeType === 'error' || noticeType === 'warning', isPost ? 10000 : undefined);
         }
+        else if (replaced && isPost) showAjaxStatus('The Employee List refreshed, but the server did not confirm whether the bulk changes were applied. Check the selected users before retrying.', true, 12000);
         else if (replaced) showAjaxStatus(response.ok ? 'Updated.' : 'The server returned an error. Check the page and try again.', !response.ok);
-        else if (!(options && options.isPost)) showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
+        else if (isPost && notice) showAjaxStatus(notice.textContent.trim(), notice.getAttribute('data-eum-notice-type') === 'error' || notice.getAttribute('data-eum-notice-type') === 'warning', 10000);
+        else if (isPost) showAjaxStatus('The server response did not include the Employee List. The bulk update could not be confirmed; reload before retrying.', true, 12000);
+        else showAjaxStatus('The page responded, but the requested section could not be refreshed. Try again.', true);
         return replaced;
       });
     }).catch(function () {
-      showAjaxStatus(options && options.isPost ? 'Couldn’t confirm the save. Check the listing before trying again.' : 'Couldn’t update this section. Please try again.', true);
+      showAjaxStatus(isPost ? 'Couldn’t confirm the save because the request failed. Check the Employee List before trying again.' : 'Couldn’t update this section. Please try again.', true, isPost ? 12000 : undefined);
       return false;
     }).then(function (result) {
       ajaxRequestCount = Math.max(0, ajaxRequestCount - 1);
