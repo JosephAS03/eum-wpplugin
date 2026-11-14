@@ -1555,6 +1555,208 @@
     requestAjaxRegions(regions, keys, window.location.href, { method: 'GET', popstate: true, strictTargets: true });
   });
 
+  var activeInviteTemplateComposer = null;
+  function candidateInviteTemplateManager() {
+    return document.querySelector('[data-eum-candidate-template-manager="1"]');
+  }
+  function renderCandidateInviteTemplateOptions(templates) {
+    document.querySelectorAll('[data-eum-candidate-template-select="1"]').forEach(function (select) {
+      var previous = select.value;
+      while (select.firstChild) select.removeChild(select.firstChild);
+      var empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = '— Select a template —';
+      select.appendChild(empty);
+      templates.forEach(function (template) {
+        var option = document.createElement('option');
+        option.value = String(template.id || '');
+        option.textContent = String(template.name || '');
+        option.setAttribute('data-template-body', String(template.body || ''));
+        select.appendChild(option);
+      });
+      var manage = document.createElement('option');
+      manage.value = '__manage_templates';
+      manage.textContent = 'Create or manage templates…';
+      select.appendChild(manage);
+      select.value = templates.some(function (template) { return String(template.id || '') === previous; }) ? previous : '';
+    });
+    var manager = candidateInviteTemplateManager();
+    if (!manager) return;
+    var editor = manager.querySelector('[data-eum-template-editor-select="1"]');
+    var selectedId = editor ? editor.value : '';
+    if (!editor) return;
+    while (editor.firstChild) editor.removeChild(editor.firstChild);
+    var newOption = document.createElement('option');
+    newOption.value = '';
+    newOption.textContent = '— New template —';
+    editor.appendChild(newOption);
+    templates.forEach(function (template) {
+      var option = document.createElement('option');
+      option.value = String(template.id || '');
+      option.textContent = String(template.name || '');
+      option.setAttribute('data-template-name', String(template.name || ''));
+      option.setAttribute('data-template-body', String(template.body || ''));
+      editor.appendChild(option);
+    });
+    editor.value = templates.some(function (template) { return String(template.id || '') === selectedId; }) ? selectedId : '';
+    var deleteButton = manager.querySelector('[data-eum-template-delete="1"]');
+    if (deleteButton) deleteButton.disabled = !editor.value;
+    var saveButton = manager.querySelector('[data-eum-template-save="1"]');
+    if (saveButton) saveButton.textContent = editor.value ? 'Save Changes' : 'Create Template';
+  }
+  function applyCandidateInviteTemplate(composer, select) {
+    if (!composer || !select) return;
+    var output = composer.querySelector('[data-eum-candidate-message-output="1"]');
+    var selected = select.options[select.selectedIndex];
+    if (!output) return;
+    if (select.value === '__manage_templates') {
+      select.value = '';
+      activeInviteTemplateComposer = composer;
+      var manager = candidateInviteTemplateManager();
+      if (manager) {
+        manager.open = true;
+        manager.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        var editor = manager.querySelector('[data-eum-template-editor-select="1"]');
+        if (editor) {
+          editor.value = '';
+          editor.dispatchEvent(new Event('change', { bubbles: true }));
+          var name = manager.querySelector('[data-eum-template-name="1"]');
+          if (name) name.focus();
+        }
+      }
+      return;
+    }
+    var copyButton = composer.querySelector('[data-eum-copy-candidate-message="1"]');
+    if (!select.value || !selected) {
+      output.value = '';
+      if (copyButton) copyButton.disabled = true;
+      return;
+    }
+    var vars = {
+      name: composer.getAttribute('data-candidate-name') || '',
+      first_name: composer.getAttribute('data-candidate-first-name') || '',
+      email: composer.getAttribute('data-candidate-email') || '',
+      job_title: composer.getAttribute('data-candidate-job-title') || '',
+      invite_link: composer.getAttribute('data-candidate-invite-link') || '',
+      invite_code: composer.getAttribute('data-candidate-invite-code') || '',
+      site_name: composer.getAttribute('data-candidate-site-name') || ''
+    };
+    output.value = String(selected.getAttribute('data-template-body') || '').replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, function (token, key) {
+      var normalized = String(key || '').toLowerCase();
+      return Object.prototype.hasOwnProperty.call(vars, normalized) ? vars[normalized] : token;
+    });
+    if (copyButton) copyButton.disabled = !output.value;
+  }
+  document.addEventListener('change', function (event) {
+    var composerSelect = event.target.closest('[data-eum-candidate-template-select="1"]');
+    if (composerSelect) applyCandidateInviteTemplate(composerSelect.closest('[data-eum-candidate-message="1"]'), composerSelect);
+    var editorSelect = event.target.closest('[data-eum-template-editor-select="1"]');
+    if (!editorSelect) return;
+    var manager = editorSelect.closest('[data-eum-candidate-template-manager="1"]');
+    if (!manager) return;
+    var selected = editorSelect.options[editorSelect.selectedIndex];
+    var nameInput = manager.querySelector('[data-eum-template-name="1"]');
+    var bodyInput = manager.querySelector('[data-eum-template-body="1"]');
+    var saveButton = manager.querySelector('[data-eum-template-save="1"]');
+    var deleteButton = manager.querySelector('[data-eum-template-delete="1"]');
+    var templateId = selected && editorSelect.value ? editorSelect.value : '';
+    if (nameInput) nameInput.value = templateId && selected ? String(selected.getAttribute('data-template-name') || '') : '';
+    if (bodyInput) bodyInput.value = templateId && selected ? String(selected.getAttribute('data-template-body') || '') : '';
+    if (saveButton) saveButton.textContent = templateId ? 'Save Changes' : 'Create Template';
+    if (deleteButton) deleteButton.disabled = !templateId;
+  });
+  document.addEventListener('click', function (event) {
+    var openManager = event.target.closest('[data-eum-open-template-manager="1"]');
+    if (openManager) {
+      activeInviteTemplateComposer = openManager.closest('[data-eum-candidate-message="1"]');
+      var targetManager = candidateInviteTemplateManager();
+      if (targetManager) {
+        targetManager.open = true;
+        targetManager.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        var editor = targetManager.querySelector('[data-eum-template-editor-select="1"]');
+        var composerSelect = activeInviteTemplateComposer ? activeInviteTemplateComposer.querySelector('[data-eum-candidate-template-select="1"]') : null;
+        if (editor && composerSelect && composerSelect.value && composerSelect.value !== '__manage_templates') editor.value = composerSelect.value;
+        if (editor) editor.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
+    }
+    var saveTemplate = event.target.closest('[data-eum-template-save="1"]');
+    var deleteTemplate = event.target.closest('[data-eum-template-delete="1"]');
+    if (saveTemplate || deleteTemplate) {
+      var button = saveTemplate || deleteTemplate;
+      var manager = button.closest('[data-eum-candidate-template-manager="1"]');
+      if (!manager || button.disabled) return;
+      var url = manager.getAttribute('data-eum-template-ajax-url') || '';
+      var payload = new FormData();
+      payload.append('action', saveTemplate ? 'eum_job_board_invite_template_save' : 'eum_job_board_invite_template_delete');
+      payload.append('nonce', manager.getAttribute('data-eum-template-nonce') || '');
+      var editor = manager.querySelector('[data-eum-template-editor-select="1"]');
+      payload.append('template_id', editor ? editor.value : '');
+      if (saveTemplate) {
+        var nameInput = manager.querySelector('[data-eum-template-name="1"]');
+        var bodyInput = manager.querySelector('[data-eum-template-body="1"]');
+        payload.append('template_name', nameInput ? nameInput.value : '');
+        payload.append('template_body', bodyInput ? bodyInput.value : '');
+      }
+      var status = manager.querySelector('[data-eum-template-status="1"]');
+      button.disabled = true;
+      if (status) status.textContent = saveTemplate ? 'Saving…' : 'Deleting…';
+      window.fetch(url, { method: 'POST', credentials: 'same-origin', body: payload }).then(function (response) {
+        return response.json().then(function (json) { return { ok: response.ok, json: json }; });
+      }).then(function (result) {
+        var responseData = result.json && result.json.data ? result.json.data : {};
+        if (!result.ok || !result.json || !result.json.success) {
+          var errorMessage = responseData.message || 'Could not save invite templates.';
+          if (status) status.textContent = errorMessage;
+          showAjaxStatus(errorMessage, true, 9000);
+          return;
+        }
+        renderCandidateInviteTemplateOptions(Array.isArray(responseData.templates) ? responseData.templates : []);
+        if (saveTemplate && editor && responseData.template_id) {
+          editor.value = String(responseData.template_id);
+          editor.dispatchEvent(new Event('change', { bubbles: true }));
+          if (activeInviteTemplateComposer) {
+            var composeSelect = activeInviteTemplateComposer.querySelector('[data-eum-candidate-template-select="1"]');
+            if (composeSelect) {
+              composeSelect.value = String(responseData.template_id);
+              applyCandidateInviteTemplate(activeInviteTemplateComposer, composeSelect);
+            }
+          }
+        } else if (deleteTemplate) {
+          if (editor) { editor.value = ''; editor.dispatchEvent(new Event('change', { bubbles: true })); }
+          if (activeInviteTemplateComposer) {
+            var activeSelect = activeInviteTemplateComposer.querySelector('[data-eum-candidate-template-select="1"]');
+            if (activeSelect && activeSelect.value === String(payload.get('template_id') || '')) {
+              activeSelect.value = '';
+              applyCandidateInviteTemplate(activeInviteTemplateComposer, activeSelect);
+            }
+          }
+        }
+        if (status) status.textContent = responseData.message || 'Templates saved.';
+        showAjaxStatus(responseData.message || 'Templates saved.', false, 5000);
+      }).catch(function () {
+        if (status) status.textContent = 'Could not save invite templates. Try again.';
+        showAjaxStatus('Could not save invite templates. Try again.', true, 9000);
+      }).finally(function () {
+        button.disabled = false;
+      });
+      return;
+    }
+    var copyMessage = event.target.closest('[data-eum-copy-candidate-message="1"]');
+    if (!copyMessage) return;
+    var composer = copyMessage.closest('[data-eum-candidate-message="1"]');
+    var message = composer ? composer.querySelector('[data-eum-candidate-message-output="1"]') : null;
+    if (!message || !message.value) return;
+    var report = function (success) { showAjaxStatus(success ? 'Personalized invite message copied.' : 'Copy failed. Select the message and copy it manually.', !success); };
+    if (navigator.clipboard && window.isSecureContext && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(message.value).then(function () { report(true); }).catch(function () { report(false); });
+    } else {
+      message.focus();
+      message.select();
+      try { report(document.execCommand('copy')); } catch (error) { report(false); }
+    }
+  });
+
   document.addEventListener('click', function (event) {
     var button = event.target.closest('[data-eum-copy-candidate-link="1"]');
     if (!button) return;

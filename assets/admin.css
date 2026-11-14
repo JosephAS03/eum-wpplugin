@@ -852,6 +852,26 @@ body:not(.wp-admin) .eum-ar form .description {
 .eum-candidate-card__invite code { color: #344054; font-size: 12px; }
 .eum-candidate-card__invite-link { display: flex; flex: 1 1 280px; gap: 7px; min-width: 0; }
 .eum-candidate-card__invite-link input { flex: 1 1 auto; width: 100%; min-width: 0; }
+.eum-candidate-card__message { display: grid; flex: 1 1 100%; gap: 8px; min-width: 0; padding-top: 8px; }
+.eum-candidate-card__message label,
+.eum-candidate-template-manager label { display: grid; gap: 5px; }
+.eum-candidate-card__message select,
+.eum-candidate-card__message textarea,
+.eum-candidate-template-manager input,
+.eum-candidate-template-manager select,
+.eum-candidate-template-manager textarea { width: 100%; min-width: 0; }
+.eum-candidate-card__message textarea,
+.eum-candidate-template-manager textarea { resize: vertical; }
+.eum-candidate-card__message-actions,
+.eum-candidate-template-manager__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.eum-candidate-template-manager { margin: 14px 0; border: 1px solid #d0d7de; border-radius: 10px; background: #f8fafc; }
+.eum-candidate-template-manager > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; cursor: pointer; list-style: none; }
+.eum-candidate-template-manager > summary::-webkit-details-marker { display: none; }
+.eum-candidate-template-manager > summary:after { content: "+"; font-size: 18px; font-weight: 700; }
+.eum-candidate-template-manager[open] > summary:after { content: "−"; }
+.eum-candidate-template-manager > summary span { color: #667085; font-size: 12px; }
+.eum-candidate-template-manager__body { display: grid; gap: 12px; padding: 0 14px 14px; }
+.eum-candidate-template-manager__actions [data-eum-template-status] { color: #475467; font-size: 12px; }
 .eum-candidate-card__submitted { color: #176b35; font-size: 12px; font-weight: 600; }
 .eum-candidate-card__actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .eum-candidate-card__actions .button { margin: 0; }

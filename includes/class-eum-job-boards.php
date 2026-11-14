@@ -6,6 +6,7 @@ class EUM_Job_Boards {
   const CPT_CANDIDATE = 'eum_job_candidate';
   const OPTION_SETTINGS = 'eum_job_board_settings';
   const USER_META_CANDIDATE_IDS = '_eum_candidate_ids';
+  const USER_META_INVITE_MESSAGE_TEMPLATES = '_eum_candidate_invite_message_templates';
 
   const JOB_META_JOB_TERM = '_eum_job_term_id';
   const JOB_META_JOB_TITLE = '_eum_job_title';
@@ -87,6 +88,8 @@ class EUM_Job_Boards {
     add_action('admin_post_eum_job_board_candidate_create_review_invite', [$this, 'handle_candidate_create_review_invite']);
     add_action('admin_post_eum_job_board_candidate_bulk_signup_redirect', [$this, 'handle_candidate_bulk_signup_redirect']);
     add_action('admin_post_eum_job_board_candidate_clone_invite', [$this, 'handle_candidate_clone_invite']);
+    add_action('wp_ajax_eum_job_board_invite_template_save', [$this, 'ajax_save_invite_message_template']);
+    add_action('wp_ajax_eum_job_board_invite_template_delete', [$this, 'ajax_delete_invite_message_template']);
     add_action('admin_post_eum_job_board_candidate_signup', [$this, 'handle_preaccepted_candidate_signup']);
     add_action('admin_post_nopriv_eum_job_board_candidate_signup', [$this, 'handle_preaccepted_candidate_signup']);
     add_action('login_init', [$this, 'handle_candidate_auto_login_ticket'], 1);
@@ -337,6 +340,75 @@ class EUM_Job_Boards {
     return hash_hmac('sha256', trim($code), wp_salt('auth'));
   }
 
+  private function candidate_invite_message_templates(int $user_id): array {
+    if ($user_id <= 0) return [];
+    $saved = get_user_meta($user_id, self::USER_META_INVITE_MESSAGE_TEMPLATES, true);
+    if (!is_array($saved)) return [];
+    $templates = [];
+    foreach ($saved as $template) {
+      if (!is_array($template)) continue;
+      $id = sanitize_key((string)($template['id'] ?? ''));
+      $name = sanitize_text_field((string)($template['name'] ?? ''));
+      $body = sanitize_textarea_field((string)($template['body'] ?? ''));
+      if ($id === '' || $name === '' || $body === '') continue;
+      $templates[] = ['id' => $id, 'name' => $name, 'body' => $body];
+    }
+    return array_slice($templates, 0, 30);
+  }
+
+  private function ajax_require_invite_template_access(): int {
+    $user_id = (int)get_current_user_id();
+    if (!self::can_manage_jobs($user_id)) wp_send_json_error(['message' => 'You do not have access to candidate invite templates.'], 403);
+    check_ajax_referer('eum_job_board_invite_templates', 'nonce');
+    return $user_id;
+  }
+
+  public function ajax_save_invite_message_template(): void {
+    $user_id = $this->ajax_require_invite_template_access();
+    $name = sanitize_text_field((string)wp_unslash($_POST['template_name'] ?? ''));
+    $body = sanitize_textarea_field((string)wp_unslash($_POST['template_body'] ?? ''));
+    $template_id = sanitize_key((string)wp_unslash($_POST['template_id'] ?? ''));
+    if ($name === '' || $body === '') wp_send_json_error(['message' => 'Enter a template name and message.'], 400);
+    if (function_exists('mb_strlen') ? mb_strlen($name) > 80 : strlen($name) > 80) wp_send_json_error(['message' => 'Template names can be up to 80 characters.'], 400);
+    if (function_exists('mb_strlen') ? mb_strlen($body) > 10000 : strlen($body) > 10000) wp_send_json_error(['message' => 'Template messages can be up to 10,000 characters.'], 400);
+
+    $templates = $this->candidate_invite_message_templates($user_id);
+    $found = false;
+    foreach ($templates as &$template) {
+      if ($template_id !== '' && hash_equals((string)$template['id'], $template_id)) {
+        $template['name'] = $name;
+        $template['body'] = $body;
+        $found = true;
+        break;
+      }
+    }
+    unset($template);
+    if ($template_id !== '' && !$found) wp_send_json_error(['message' => 'That template no longer exists. Refresh and try again.'], 404);
+    if (!$found) {
+      if (count($templates) >= 30) wp_send_json_error(['message' => 'You can save up to 30 invite templates. Delete one before adding another.'], 400);
+      $template_id = str_replace('-', '', wp_generate_uuid4());
+      $templates[] = ['id' => $template_id, 'name' => $name, 'body' => $body];
+    }
+    update_user_meta($user_id, self::USER_META_INVITE_MESSAGE_TEMPLATES, $templates);
+    wp_send_json_success([
+      'templates' => $templates,
+      'template_id' => $template_id,
+      'message' => $found ? 'Invite template updated.' : 'Invite template created.',
+    ]);
+  }
+
+  public function ajax_delete_invite_message_template(): void {
+    $user_id = $this->ajax_require_invite_template_access();
+    $template_id = sanitize_key((string)wp_unslash($_POST['template_id'] ?? ''));
+    if ($template_id === '') wp_send_json_error(['message' => 'Choose an invite template to delete.'], 400);
+    $templates = $this->candidate_invite_message_templates($user_id);
+    $remaining = array_values(array_filter($templates, static fn($template) => !hash_equals((string)$template['id'], $template_id)));
+    if (count($remaining) === count($templates)) wp_send_json_error(['message' => 'That template no longer exists. Refresh and try again.'], 404);
+    if (empty($remaining)) delete_user_meta($user_id, self::USER_META_INVITE_MESSAGE_TEMPLATES);
+    else update_user_meta($user_id, self::USER_META_INVITE_MESSAGE_TEMPLATES, $remaining);
+    wp_send_json_success(['templates' => $remaining, 'message' => 'Invite template deleted.']);
+  }
+
   private function candidate_account_lock_name(int $candidate_id): string {
     return '_eum_candidate_account_create_lock_' . max(0, $candidate_id);
   }
@@ -463,6 +535,40 @@ class EUM_Job_Boards {
       return home_url('/join/' . rawurlencode($code) . '/');
     }
     return add_query_arg(['eum_candidate_invite' => $code], $base_url);
+  }
+
+  private function render_candidate_invite_template_manager(int $user_id, array $templates): string {
+    ob_start();
+    echo '<details class="eum-candidate-template-manager" data-eum-candidate-template-manager="1" data-eum-template-ajax-url="' . esc_url(admin_url('admin-ajax.php')) . '" data-eum-template-nonce="' . esc_attr(wp_create_nonce('eum_job_board_invite_templates')) . '">';
+    echo '<summary><strong>Invite Message Templates</strong><span>Saved privately to your account</span></summary>';
+    echo '<div class="eum-candidate-template-manager__body">';
+    echo '<p class="description">Create reusable messages for pre-approved signup or applicant review links. Tokens are replaced with the candidate’s details when you select a template.</p>';
+    echo '<label><strong>Saved templates</strong><select data-eum-template-editor-select="1"><option value="">— New template —</option>';
+    foreach ($templates as $template) {
+      echo '<option value="' . esc_attr((string)$template['id']) . '" data-template-name="' . esc_attr((string)$template['name']) . '" data-template-body="' . esc_attr((string)$template['body']) . '">' . esc_html((string)$template['name']) . '</option>';
+    }
+    echo '</select></label>';
+    echo '<label><strong>Template name</strong><input type="text" maxlength="80" data-eum-template-name="1" placeholder="Welcome invite"></label>';
+    echo '<label><strong>Message</strong><textarea rows="6" maxlength="10000" data-eum-template-body="1" placeholder="Hi {{first_name}},\n\nYou can complete your signup here: {{invite_link}}"></textarea></label>';
+    echo '<p class="description">Available tokens: <code>{{name}}</code>, <code>{{first_name}}</code>, <code>{{email}}</code>, <code>{{job_title}}</code>, <code>{{invite_link}}</code>, <code>{{invite_code}}</code>, and <code>{{site_name}}</code>.</p>';
+    echo '<div class="eum-candidate-template-manager__actions"><button type="button" class="button button-primary" data-eum-template-save="1">Create Template</button><button type="button" class="button" data-eum-template-delete="1"' . (empty($templates) ? ' disabled' : '') . '>Delete Selected</button><span data-eum-template-status="1" role="status" aria-live="polite"></span></div>';
+    echo '</div></details>';
+    return ob_get_clean();
+  }
+
+  private function render_candidate_invite_message_composer(array $templates, string $full_name, string $email, string $job_title, string $invite_code, string $invite_url): string {
+    [$first_name] = $this->split_candidate_name($full_name);
+    ob_start();
+    echo '<div class="eum-candidate-card__message" data-eum-candidate-message="1" data-candidate-name="' . esc_attr($full_name) . '" data-candidate-first-name="' . esc_attr($first_name) . '" data-candidate-email="' . esc_attr($email) . '" data-candidate-job-title="' . esc_attr($job_title) . '" data-candidate-invite-code="' . esc_attr($invite_code) . '" data-candidate-invite-link="' . esc_attr($invite_url) . '" data-candidate-site-name="' . esc_attr(wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES)) . '">';
+    echo '<label><strong>Message template</strong><select data-eum-candidate-template-select="1"><option value="">— Select a template —</option>';
+    foreach ($templates as $template) {
+      echo '<option value="' . esc_attr((string)$template['id']) . '" data-template-body="' . esc_attr((string)$template['body']) . '">' . esc_html((string)$template['name']) . '</option>';
+    }
+    echo '<option value="__manage_templates">Create or manage templates…</option></select></label>';
+    echo '<textarea rows="4" data-eum-candidate-message-output="1" aria-label="Personalized candidate invite message" placeholder="Select a template to personalize it for this candidate."></textarea>';
+    echo '<div class="eum-candidate-card__message-actions"><button type="button" class="button button-small" data-eum-copy-candidate-message="1" disabled>Copy Message</button><button type="button" class="button button-small" data-eum-open-template-manager="1">Manage Templates</button></div>';
+    echo '</div>';
+    return ob_get_clean();
   }
 
   private function candidate_by_invite_code(string $code): int {
@@ -773,6 +879,7 @@ class EUM_Job_Boards {
     }));
     foreach ($display_candidates as $candidate) $this->ensure_candidate_review_invite((int)$candidate->ID);
     $pending_invite_count = count(array_filter($display_candidates, fn($candidate) => $this->candidate_has_pending_signup_invite((int)$candidate->ID)));
+    $invite_message_templates = $this->candidate_invite_message_templates((int)$user_id);
     $history_toggle_url = $show_historical_candidates
       ? remove_query_arg(['eum_candidate_history'], $this->current_url())
       : add_query_arg(['eum_candidate_history' => '1'], $this->current_url());
@@ -784,6 +891,7 @@ class EUM_Job_Boards {
     if (!$show_historical_candidates && !empty($historical_candidates)) {
       echo '<p class="description" style="margin-top:10px;">' . count($historical_candidates) . ' historical candidates are hidden from the default queue.</p>';
     }
+    echo $this->render_candidate_invite_template_manager((int)$user_id, $invite_message_templates);
     if (!empty($display_candidates)) {
       if ($pending_invite_count > 0) {
         echo '<form id="eum-candidate-bulk-redirect-form" method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="margin:16px 0;padding:14px;border:1px solid #d0d7de;border-radius:8px;background:#f8f9fa;">';
@@ -830,7 +938,11 @@ class EUM_Job_Boards {
         echo '<div class="eum-candidate-card__job"><span>Applied for</span><strong>' . esc_html($candidate_job_title !== '' ? $candidate_job_title : 'Job posting unavailable') . '</strong></div>';
         if ($invite_code !== '') {
           echo '<div class="eum-candidate-card__invite"><div><span>Invite code</span><code>' . esc_html($invite_code) . '</code></div>';
-          echo '<div class="eum-candidate-card__invite-link"><input type="text" readonly onclick="this.select();" aria-label="Candidate invite link" value="' . esc_attr($invite_url) . '"><button type="button" class="button button-small" data-eum-copy-candidate-link="1">Copy link</button></div>';
+          echo '<div class="eum-candidate-card__invite-link"><input type="text" readonly onclick="this.select();" aria-label="Candidate invite link" value="' . esc_attr($invite_url) . '"><button type="button" class="button button-small" data-eum-copy-candidate-link="1">Copy Invite</button></div>';
+          $has_shareable_invite = $can_bulk_update_redirect || ($review_invite_code !== '' && !$review_invite_completed);
+          if ($has_shareable_invite && $invite_url !== '') {
+            echo $this->render_candidate_invite_message_composer($invite_message_templates, $candidate_name, $candidate_email, $candidate_job_title, $invite_code, $invite_url);
+          }
           if ($review_invite_completed) echo '<span class="eum-candidate-card__submitted">Review form submitted</span>';
           echo '</div>';
         }
