@@ -27,6 +27,7 @@ class EUM_Profiles {
   const META_PROFILE_IMAGE_URL = '_eum_profile_image_url';
   const META_PROFILE_IMAGE_ID = '_eum_profile_image_id';
   const META_PROFILE_IMAGE_COLOR = '_eum_profile_image_color';
+  const PROFILE_IMAGE_REWRITE_VERSION = '1';
   const USER_META_WORK_HISTORY = '_eum_candidate_work_history';
   const USER_META_EDUCATION_HISTORY = '_eum_candidate_education_history';
   const USER_META_RESUME_ATTACHMENT_ID = '_eum_candidate_resume_attachment_id';
@@ -37,7 +38,11 @@ class EUM_Profiles {
 
   public function init(): void {
     add_action('init', [$this, 'register_change_cpt']);
+    add_action('init', [$this, 'register_profile_image_rewrite'], 1);
+    add_action('init', [$this, 'maybe_flush_profile_image_rewrite'], 99);
     add_action('init', [$this, 'apply_due_changes'], 30);
+    add_filter('query_vars', [$this, 'register_profile_image_query_var']);
+    add_action('template_redirect', [$this, 'serve_profile_image'], 0);
 
     add_action('admin_menu', [$this, 'admin_menu'], 45);
 
@@ -1472,21 +1477,114 @@ class EUM_Profiles {
   }
 
   public static function profile_avatar_url(int $user_id): string {
+    $user = get_user_by('id', $user_id);
+    if (!$user instanceof WP_User) return '';
+
     $image_url = self::profile_image_url($user_id);
-    if ($image_url !== '') return $image_url;
-    if (!get_user_by('id', $user_id)) return '';
+    $file_path = self::profile_image_local_path($user_id, $image_url);
+    $image_info = $file_path !== '' ? @getimagesize($file_path) : false;
+    // Keep externally hosted profile photos working as they did before. Images
+    // managed by this site (and generated initials) use a stable public URL.
+    if ($image_url !== '' && ($file_path === '' || !is_array($image_info))) return $image_url;
 
-    $initials = self::profile_initials($user_id);
-    $color = self::profile_image_color($user_id);
-    $version = substr(md5('jpeg-v3|' . $initials . '|' . $color), 0, 12);
-    $jpeg_url = self::generated_profile_avatar_jpeg_url($user_id, $initials, $color, $version);
-    if ($jpeg_url !== '') return add_query_arg('v', $version, $jpeg_url);
+    $version_source = $image_url;
+    if ($file_path !== '' && is_readable($file_path)) {
+      $version_source .= '|' . (string)@filesize($file_path) . '|' . (string)@filemtime($file_path);
+    } elseif ($image_url === '') {
+      $version_source = 'jpeg-v3|' . self::profile_initials($user_id) . '|' . self::profile_image_color($user_id);
+    }
+    $version = substr(md5($version_source), 0, 12);
+    $username = rawurlencode((string)$user->user_login);
+    return add_query_arg('v', $version, home_url('/userimages/' . $username . '.jpg'));
+  }
 
-    return add_query_arg([
-      'action' => 'eum_profile_generated_avatar',
-      'user_id' => $user_id,
-      'v' => $version,
-    ], admin_url('admin-post.php'));
+  public function register_profile_image_rewrite(): void {
+    add_rewrite_rule('^userimages/([^/]+)\.jpg$', 'index.php?eum_user_image=$matches[1]', 'top');
+  }
+
+  public function register_profile_image_query_var(array $vars): array {
+    $vars[] = 'eum_user_image';
+    return array_values(array_unique($vars));
+  }
+
+  public function maybe_flush_profile_image_rewrite(): void {
+    if ((string)get_option('eum_profile_image_rewrite_version', '') === self::PROFILE_IMAGE_REWRITE_VERSION) return;
+    flush_rewrite_rules(false);
+    update_option('eum_profile_image_rewrite_version', self::PROFILE_IMAGE_REWRITE_VERSION, false);
+  }
+
+  public function serve_profile_image(): void {
+    $username = get_query_var('eum_user_image');
+    if (!is_string($username) || $username === '') return;
+
+    $username = sanitize_user(rawurldecode($username), true);
+    $user = $username !== '' ? get_user_by('login', $username) : false;
+    if (!$user instanceof WP_User) {
+      status_header(404);
+      exit;
+    }
+
+    $image_url = self::profile_image_url((int)$user->ID);
+    $file_path = self::profile_image_local_path((int)$user->ID, $image_url);
+    if ($file_path === '' && $image_url === '') {
+      $initials = self::profile_initials((int)$user->ID);
+      $color = self::profile_image_color((int)$user->ID);
+      $version = substr(md5('jpeg-v3|' . $initials . '|' . $color), 0, 12);
+      $generated_url = self::generated_profile_avatar_jpeg_url((int)$user->ID, $initials, $color, $version);
+      $file_path = self::profile_image_local_path((int)$user->ID, $generated_url);
+      if ($file_path === '') {
+        header('Content-Type: image/jpeg');
+        header('Content-Disposition: inline; filename="' . sanitize_file_name($username) . '.jpg"');
+        header('Cache-Control: public, max-age=86400, s-maxage=86400');
+        header('X-Content-Type-Options: nosniff');
+        if (self::render_generated_profile_avatar_jpeg($initials, $color, null)) exit;
+        status_header(503);
+        exit;
+      }
+    }
+
+    $image_info = $file_path !== '' && is_readable($file_path) ? @getimagesize($file_path) : false;
+    if (!is_array($image_info) || empty($image_info['mime']) || strpos((string)$image_info['mime'], 'image/') !== 0) {
+      status_header(404);
+      exit;
+    }
+
+    $size = (int)@filesize($file_path);
+    $modified = (int)@filemtime($file_path);
+    header('Content-Type: ' . sanitize_mime_type((string)$image_info['mime']));
+    header('Content-Disposition: inline; filename="' . sanitize_file_name($username) . '.jpg"');
+    header('Cache-Control: public, max-age=86400, s-maxage=86400');
+    header('X-Content-Type-Options: nosniff');
+    if ($size > 0) header('Content-Length: ' . $size);
+    if ($modified > 0) header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $modified) . ' GMT');
+    readfile($file_path);
+    exit;
+  }
+
+  private static function profile_image_local_path(int $user_id, string $image_url = ''): string {
+    $attachment_id = (int)get_user_meta($user_id, self::META_PROFILE_IMAGE_ID, true);
+    if ($attachment_id > 0) {
+      $path = get_attached_file($attachment_id);
+      if (is_string($path) && $path !== '' && is_file($path) && is_readable($path)) return $path;
+    }
+
+    if ($image_url === '') return '';
+    $uploads = wp_upload_dir();
+    $base_url = rtrim((string)($uploads['baseurl'] ?? ''), '/');
+    $base_dir = rtrim((string)($uploads['basedir'] ?? ''), '/\\');
+    if ($base_url === '' || $base_dir === '') return '';
+
+    $url_path = (string)wp_parse_url($image_url, PHP_URL_PATH);
+    $base_path = rtrim((string)wp_parse_url($base_url, PHP_URL_PATH), '/');
+    if ($url_path === '' || ($base_path !== '' && strpos($url_path, $base_path . '/') !== 0)) return '';
+
+    $relative = ltrim(rawurldecode(substr($url_path, strlen($base_path))), '/');
+    if ($relative === '') return '';
+    $candidate = $base_dir . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
+    $real_base = realpath($base_dir);
+    $real_candidate = realpath($candidate);
+    if ($real_base === false || $real_candidate === false || strpos($real_candidate, $real_base . DIRECTORY_SEPARATOR) !== 0 || !is_file($real_candidate) || !is_readable($real_candidate)) return '';
+    return $real_candidate;
   }
 
   public function handle_generated_profile_avatar(): void {
@@ -1708,7 +1806,7 @@ class EUM_Profiles {
   }
 
   public static function profile_avatar_html(int $user_id, int $size = 96, string $class = ''): string {
-    $url = self::profile_image_url($user_id);
+    $url = self::profile_avatar_url($user_id);
     $style = 'width:' . (int)$size . 'px;height:' . (int)$size . 'px;';
     $classes = trim('eum-profile-avatar ' . $class);
     if ($url !== '') {
