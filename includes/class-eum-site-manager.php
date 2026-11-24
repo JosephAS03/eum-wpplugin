@@ -13,7 +13,7 @@ class EUM_Site_Manager {
   const OPTION_DEPROVISION_QUEUE = 'eum_site_manager_user_deprovision_queue';
   const OPTION_PATH_MEMBERSHIP_BACKFILL = 'eum_site_manager_path_membership_backfill_v1';
   const OPTION_TERMINATED_BACKFILL = 'eum_site_manager_terminated_backfill_v1';
-  const OPTION_JPEG_AVATAR_BACKFILL = 'eum_site_manager_jpeg_avatar_backfill_v3';
+  const OPTION_LOCAL_AVATAR_BACKFILL = 'eum_site_manager_local_avatar_backfill_v1';
   const AUTO_DISABLE_EXEMPT_LOGINS = ['superadmin', 'josephsimpson'];
   const PAIRING_TRANSIENT_PREFIX = 'eum_site_pairing_';
   const USER_SYNC_HOOK = 'eum_site_manager_process_user_sync_queue';
@@ -32,7 +32,9 @@ class EUM_Site_Manager {
     add_action('deleted_user_meta', [$this, 'queue_user_sync_from_meta'], 90, 4);
     add_action('set_object_terms', [$this, 'queue_user_sync_from_terms'], 90, 6);
     add_action('init', [$this, 'maybe_queue_path_membership_backfill'], 97);
-    add_action('init', [$this, 'maybe_queue_placeholder_avatar_backfill'], 98);
+    add_action('eum_profile_image_uploaded', [$this, 'queue_user_sync'], 5, 1);
+    add_action('eum_profile_image_removed', [$this, 'queue_user_sync'], 5, 1);
+    add_action('init', [$this, 'maybe_queue_local_avatar_backfill'], 98);
     add_action('init', [$this, 'maybe_queue_terminated_user_backfill'], 99);
     add_action(self::USER_SYNC_HOOK, [$this, 'process_user_sync_queue']);
     add_action('wp_ajax_eum_site_manager_create_pairing_code', [$this, 'ajax_create_pairing_code']);
@@ -504,6 +506,7 @@ class EUM_Site_Manager {
       )));
     }
     update_option(self::OPTION_SITES, $sites, false);
+    $this->queue_user_sync_batch($successful_selected_ids);
     self::record_audit($site_id, $manager_user_id, $reason, $body['results']);
 
     $summary = sprintf('Provisioning finished: %d created, %d linked by email, %d updated, %d failed.', $created, $linked, $updated, $failed);
@@ -662,20 +665,14 @@ class EUM_Site_Manager {
     $this->queue_user_sync_backfill(array_keys($terminated_ids), self::OPTION_TERMINATED_BACKFILL);
   }
 
-  public function maybe_queue_placeholder_avatar_backfill(): void {
-    if (get_option(self::OPTION_JPEG_AVATAR_BACKFILL, false) || !class_exists('EUM_Profiles')) return;
+  public function maybe_queue_local_avatar_backfill(): void {
+    if (get_option(self::OPTION_LOCAL_AVATAR_BACKFILL, false) || !class_exists('EUM_Profiles')) return;
 
-    $placeholder_ids = [];
+    $user_ids = [];
     foreach (self::get_sites() as $site) {
-      foreach ((array)$site['provisioned_user_ids'] as $user_id) {
-        $user_id = (int)$user_id;
-        if ($user_id > 0 && get_user_by('id', $user_id) && EUM_Profiles::profile_image_url($user_id) === '') {
-          $placeholder_ids[$user_id] = true;
-        }
-      }
+      $user_ids = array_merge($user_ids, $site['provisioned_user_ids']);
     }
-
-    $this->queue_user_sync_backfill(array_keys($placeholder_ids), self::OPTION_JPEG_AVATAR_BACKFILL);
+    $this->queue_user_sync_backfill($user_ids, self::OPTION_LOCAL_AVATAR_BACKFILL);
   }
 
   private function queue_user_sync_backfill(array $user_ids, string $completed_option): void {
@@ -725,6 +722,7 @@ class EUM_Site_Manager {
     $deprovision_queue = get_option(self::OPTION_DEPROVISION_QUEUE, []);
     if (!is_array($deprovision_queue)) $deprovision_queue = [];
     if (empty($queue) && empty($deprovision_queue)) return;
+    $queue = array_slice($queue, 0, 50, true);
     if (!wp_next_scheduled(self::USER_SYNC_HOOK)) wp_schedule_single_event(time() + 300, self::USER_SYNC_HOOK);
     $sites = self::get_sites();
     $payloads_by_site = [];
@@ -767,7 +765,7 @@ class EUM_Site_Manager {
     $success_ids_by_site = [];
     foreach ($payloads_by_site as $site_id => $user_payloads) {
       $site = $sites[$site_id];
-      foreach (array_chunk(array_values($user_payloads), 50) as $batch) {
+      foreach ($this->user_sync_batches($user_payloads, $failed_user_ids) as $batch) {
         $response = wp_remote_post($site['provision_url'], [
           'timeout' => 25,
           'redirection' => 0,
@@ -778,14 +776,15 @@ class EUM_Site_Manager {
             'X-EUM-Site-Key' => $site['site_key'],
           ],
           'body' => wp_json_encode([
-            'users' => $batch,
+            'users' => array_values($batch),
             'reason' => 'Automatic user data sync from the internal site',
             'manager_user_id' => 0,
             'manager_sub' => '',
           ]),
         ]);
 
-        $batch_ids = array_map(static function ($user_data) { return (int)($user_data['central_user_id'] ?? 0); }, $batch);
+        $batch_ids = array_keys($batch);
+        $sent_images = array_filter($batch, static function ($record) { return isset($record['profile_image']); });
         if (is_wp_error($response)) {
           foreach ($batch_ids as $user_id) if ($user_id > 0) $failed_user_ids[$user_id] = $response->get_error_message();
           continue;
@@ -807,6 +806,10 @@ class EUM_Site_Manager {
           if ($central_user_id > 0 && in_array($status, ['created', 'linked', 'updated'], true)) {
             $successful_ids[$central_user_id] = true;
             $success_ids_by_site[$site_id][$central_user_id] = true;
+            if (isset($sent_images[$central_user_id]) && ($result['profile_image_synced'] ?? false) !== true) {
+              $detail = sanitize_text_field((string)($result['profile_image_error'] ?? 'The connected plugin did not confirm the image transfer. Update Enterprise Connected Site.'));
+              $failed_user_ids[$central_user_id] = $site['label'] . ': ' . $detail;
+            }
           } else if ($central_user_id > 0) {
             $failed_user_ids[$central_user_id] = sanitize_text_field((string)($result['message'] ?? 'The connected site could not update this account.'));
           }
@@ -945,6 +948,39 @@ class EUM_Site_Manager {
     }
   }
 
+  /**
+   * Cap image data per request so backfills do not send oversized provisioning bodies.
+   * Account updates still travel when an individual image needs a retry.
+   */
+  private function user_sync_batches(array $payloads, array &$failures): Generator {
+    $batch = [];
+    $image_bytes = 0;
+    foreach ($payloads as $user_id => $payload) {
+      $bytes = 0;
+      if (class_exists('EUM_Profiles')) {
+        try {
+          $image = EUM_Profiles::profile_image_for_site_sync((int)$user_id);
+          if (is_wp_error($image)) {
+            $failures[$user_id] = $image->get_error_message();
+          } else {
+            $payload['profile_image'] = $image;
+            $bytes = strlen($image['base64']);
+          }
+        } catch (Throwable $e) {
+          $failures[$user_id] = 'Could not prepare the profile image: ' . $e->getMessage();
+        }
+      }
+      if (!empty($batch) && $image_bytes + $bytes > 786432) {
+        yield $batch;
+        $batch = [];
+        $image_bytes = 0;
+      }
+      $batch[$user_id] = $payload;
+      $image_bytes += $bytes;
+    }
+    if (!empty($batch)) yield $batch;
+  }
+
   private static function public_profile_snapshot(int $user_id): array {
     if (!class_exists('EUM_Profiles')) return [];
     $settings = EUM_Profiles::get_settings();
@@ -952,7 +988,7 @@ class EUM_Site_Manager {
     $snapshot = [];
     foreach ((array)($settings['public_fields'] ?? []) as $field_id) {
       $field_id = (string)$field_id;
-      if ($field_id === 'core:user_pass' || !isset($catalog[$field_id])) continue;
+      if (in_array($field_id, ['core:user_pass', 'core:eum_profile_image_url'], true) || !isset($catalog[$field_id])) continue;
       $value = EUM_Profiles::get_field_display_value($user_id, $field_id);
       if (!is_scalar($value)) continue;
       $value = sanitize_textarea_field((string)$value);
@@ -997,7 +1033,6 @@ class EUM_Site_Manager {
       'description' => sanitize_textarea_field((string)get_user_meta($user_id, 'description', true)),
       'user_url' => esc_url_raw((string)$user->user_url),
       'account_status' => $is_terminated && !$is_auto_disable_exempt ? 'inactive' : 'active',
-      'profile_image_url' => class_exists('EUM_Profiles') ? EUM_Profiles::profile_avatar_url($user_id) : '',
       'profile_data' => self::public_profile_snapshot($user_id),
       'public_meta' => class_exists('EUM_Public_Meta') ? EUM_Public_Meta::values_for_user($user_id) : [],
       'site_role' => self::site_role_for_user($user_id, $site),
@@ -1103,6 +1138,9 @@ class EUM_Site_Manager {
     $sites[$site_id]['provisioned_user_ids'] = array_values(array_unique(array_merge((array)$site['provisioned_user_ids'], [$manager_user_id])));
     $sites[$site_id]['manager_provisioned_user_ids'] = array_values(array_unique(array_merge((array)$site['manager_provisioned_user_ids'], [$manager_user_id])));
     update_option(self::OPTION_SITES, $sites, false);
+    if (!in_array($manager_user_id, $site['provisioned_user_ids'], true)) {
+      $this->queue_user_sync($manager_user_id);
+    }
     self::record_audit($site_id, $manager_user_id, 'Site Manager access granted for ' . $site['label'], $results);
     // This external destination was entered by an IT administrator and validated as HTTPS.
     wp_redirect($site['launch_url']);

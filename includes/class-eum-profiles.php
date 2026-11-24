@@ -28,6 +28,7 @@ class EUM_Profiles {
   const META_PROFILE_IMAGE_ID = '_eum_profile_image_id';
   const META_PROFILE_IMAGE_COLOR = '_eum_profile_image_color';
   const PROFILE_IMAGE_REWRITE_VERSION = '1';
+  const MAX_SYNC_PROFILE_IMAGE_BYTES = 262144;
   const USER_META_WORK_HISTORY = '_eum_candidate_work_history';
   const USER_META_EDUCATION_HISTORY = '_eum_candidate_education_history';
   const USER_META_RESUME_ATTACHMENT_ID = '_eum_candidate_resume_attachment_id';
@@ -1498,6 +1499,69 @@ class EUM_Profiles {
     return add_query_arg('v', $version, home_url('/userimages/' . $username . '.jpg'));
   }
 
+  /**
+   * Get the avatar from disk for the authenticated Site Manager sync.
+   *
+   * @return array|WP_Error
+   */
+  public static function profile_image_for_site_sync(int $user_id) {
+    $url = self::profile_image_url($user_id);
+    $path = self::profile_image_local_path($user_id, $url, true);
+    if ($path === '') {
+      if ($url !== '') {
+        return new WP_Error('eum_avatar_unreadable', 'The profile image could not be read from the internal uploads directory.');
+      }
+      ob_start();
+      try {
+        $rendered = self::render_generated_profile_avatar_jpeg(self::profile_initials($user_id), self::profile_image_color($user_id), null);
+        $bytes = $rendered ? ob_get_contents() : false;
+      } finally {
+        ob_end_clean();
+      }
+    } else {
+      $dimensions = @getimagesize($path);
+      $formats = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'];
+      if (is_array($dimensions) && max($dimensions[0], $dimensions[1]) <= 2048
+        && in_array((string)($dimensions['mime'] ?? ''), $formats, true)
+        && (int)@filesize($path) <= self::MAX_SYNC_PROFILE_IMAGE_BYTES) {
+        $bytes = @file_get_contents($path, false, null, 0, self::MAX_SYNC_PROFILE_IMAGE_BYTES + 1);
+      } else {
+        $bytes = self::resize_profile_image_for_site_sync($path);
+        if (is_wp_error($bytes)) return $bytes;
+      }
+    }
+
+    if (!is_string($bytes) || $bytes === '' || strlen($bytes) > self::MAX_SYNC_PROFILE_IMAGE_BYTES) {
+      return new WP_Error('eum_avatar_size', 'The profile image is unavailable or is too large to sync.');
+    }
+    return ['base64' => base64_encode($bytes)];
+  }
+
+  /** @return string|false|WP_Error */
+  private static function resize_profile_image_for_site_sync(string $path) {
+    $editor = wp_get_image_editor($path);
+    if (is_wp_error($editor)) return $editor;
+    $size = $editor->get_size();
+    if (max((int)($size['width'] ?? 0), (int)($size['height'] ?? 0)) > 512) {
+      $resized = $editor->resize(512, 512);
+      if (is_wp_error($resized)) return $resized;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    $temp = wp_tempnam('eum-avatar');
+    if (!$temp) return new WP_Error('eum_avatar_temp', 'Could not prepare a temporary file for the profile image.');
+    $output = $temp . '.jpg';
+    try {
+      $saved = $editor->save($output, 'image/jpeg');
+      if (is_wp_error($saved)) return $saved;
+      $output = (string)$saved['path'];
+      return @file_get_contents($output, false, null, 0, self::MAX_SYNC_PROFILE_IMAGE_BYTES + 1);
+    } finally {
+      wp_delete_file($temp);
+      wp_delete_file_from_directory($output, dirname($temp));
+    }
+  }
+
   public function register_profile_image_rewrite(): void {
     add_rewrite_rule('^userimages/([^/]+)\.jpg$', 'index.php?eum_user_image=$matches[1]', 'top');
   }
@@ -1561,18 +1625,25 @@ class EUM_Profiles {
     exit;
   }
 
-  private static function profile_image_local_path(int $user_id, string $image_url = ''): string {
+  private static function profile_image_local_path(int $user_id, string $image_url = '', bool $sync = false): string {
     $attachment_id = (int)get_user_meta($user_id, self::META_PROFILE_IMAGE_ID, true);
     if ($attachment_id > 0) {
       $path = get_attached_file($attachment_id);
-      if (is_string($path) && $path !== '' && is_file($path) && is_readable($path)) return $path;
+      if (is_string($path) && $path !== '' && is_file($path) && is_readable($path)) {
+        if (!$sync) return $path;
+        $uploads = wp_get_upload_dir();
+        $real_base = !empty($uploads['basedir']) ? realpath($uploads['basedir']) : false;
+        $real_path = realpath($path);
+        if ($real_base !== false && $real_path !== false && strpos($real_path, $real_base . DIRECTORY_SEPARATOR) === 0) return $real_path;
+      }
     }
 
     if ($image_url === '') return '';
-    $uploads = wp_upload_dir();
+    $uploads = wp_get_upload_dir();
     $base_url = rtrim((string)($uploads['baseurl'] ?? ''), '/');
     $base_dir = rtrim((string)($uploads['basedir'] ?? ''), '/\\');
     if ($base_url === '' || $base_dir === '') return '';
+    if ($sync && strcasecmp((string)wp_parse_url($image_url, PHP_URL_HOST), (string)wp_parse_url($base_url, PHP_URL_HOST)) !== 0) return '';
 
     $url_path = (string)wp_parse_url($image_url, PHP_URL_PATH);
     $base_path = rtrim((string)wp_parse_url($base_url, PHP_URL_PATH), '/');
